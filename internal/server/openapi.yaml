@@ -1,0 +1,235 @@
+openapi: 3.1.0
+info:
+  title: Skills Gateway API
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  description: |
+    Governed, identity-aware distribution of Agent Skills (SKILL.md).
+    Every /v1 request needs `Authorization: Bearer <token>`. Access is
+    default-deny and decided per request by the gateway policy.
+    Fetches the caller may not perform return 404, so hidden skills cannot
+    be enumerated; denied mutations return 403.
+servers:
+  - url: http://127.0.0.1:8080
+security:
+  - bearer: []
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      security: []
+      responses:
+        "200": { description: OK }
+  /openapi.yaml:
+    get:
+      summary: This document
+      security: []
+      responses:
+        "200": { description: OpenAPI document }
+  /v1/whoami:
+    get:
+      summary: The authenticated principal
+      responses:
+        "200":
+          description: Principal
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Principal" }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/formats:
+    get:
+      summary: Agent formats the gateway can translate to
+      responses:
+        "200": { description: Format list }
+  /v1/skills:
+    get:
+      summary: List or search skills (latest visible published version of each)
+      parameters:
+        - { name: namespace, in: query, schema: { type: string } }
+        - { name: q, in: query, description: Substring match on name and description, schema: { type: string } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, description: next_cursor from the previous page, schema: { type: string } }
+      responses:
+        "200":
+          description: One page of skills
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Version" } }
+                  next_cursor: { type: string }
+  /v1/skills/{ns}/{name}:
+    parameters:
+      - $ref: "#/components/parameters/ns"
+      - $ref: "#/components/parameters/name"
+    get:
+      summary: All versions of a skill visible to the caller, newest first
+      responses:
+        "200": { description: Versions }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/skills/{ns}/{name}/versions/{ver}:
+    parameters:
+      - $ref: "#/components/parameters/ns"
+      - $ref: "#/components/parameters/name"
+      - $ref: "#/components/parameters/ver"
+    get:
+      summary: Version metadata and file manifest
+      description: ETag is the bundle digest for published versions, with the status appended once deprecated; If-None-Match returns 304.
+      responses:
+        "200":
+          description: Version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Version" }
+        "304": { description: Not modified }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Publish a new immutable version
+      description: |
+        Body is a gzip-compressed tar of the skill directory with SKILL.md at
+        its root. Only regular files are accepted; absolute paths, `..`,
+        backslashes and links are rejected. The SKILL.md `name` must equal
+        `{name}`. Published versions can never be overwritten.
+      parameters:
+        - name: X-Bundle-Digest
+          in: header
+          description: Expected digest ("sha256:<hex>"); the upload is rejected if it differs.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema: { type: string, format: binary }
+      responses:
+        "201":
+          description: Published
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Version" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /v1/skills/{ns}/{name}/versions/{ver}/bundle:
+    parameters:
+      - $ref: "#/components/parameters/ns"
+      - $ref: "#/components/parameters/name"
+      - $ref: "#/components/parameters/ver"
+    get:
+      summary: Download the canonical bundle (tar.gz)
+      description: X-Bundle-Digest carries the digest clients must verify.
+      responses:
+        "200":
+          description: Bundle
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        "304": { description: Not modified }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/skills/{ns}/{name}/versions/{ver}/files/{path}:
+    parameters:
+      - $ref: "#/components/parameters/ns"
+      - $ref: "#/components/parameters/name"
+      - $ref: "#/components/parameters/ver"
+      - { name: path, in: path, required: true, description: File path inside the skill, may contain slashes, schema: { type: string } }
+    get:
+      summary: One file from the skill
+      responses:
+        "200": { description: File content }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/skills/{ns}/{name}/versions/{ver}/translate:
+    parameters:
+      - $ref: "#/components/parameters/ns"
+      - $ref: "#/components/parameters/name"
+      - $ref: "#/components/parameters/ver"
+      - { name: format, in: query, schema: { type: string, default: claude } }
+    get:
+      summary: The files an agent format expects, relative to the project root
+      responses:
+        "200": { description: Translation result }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/skills/{ns}/{name}/versions/{ver}/deprecate:
+    parameters:
+      - $ref: "#/components/parameters/ns"
+      - $ref: "#/components/parameters/name"
+      - $ref: "#/components/parameters/ver"
+    post:
+      summary: Mark a version deprecated (idempotent)
+      responses:
+        "200": { description: Updated version }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/audit:
+    get:
+      summary: Export the audit log as JSON Lines (requires the admin action)
+      parameters:
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: One JSON event per line
+          content:
+            application/x-ndjson: {}
+        "403": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ns: { name: ns, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 64 } }
+    name: { name: name, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 64 } }
+    ver: { name: ver, in: path, required: true, description: Semantic version, or "latest" on reads, schema: { type: string } }
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties:
+                  code:
+                    type: string
+                    enum: [unauthenticated, forbidden, not_found, version_exists, invalid_request, digest_mismatch, payload_too_large, internal]
+                  message: { type: string }
+                  request_id: { type: string }
+  schemas:
+    Principal:
+      type: object
+      properties:
+        subject: { type: string }
+        teams: { type: array, items: { type: string } }
+        roles: { type: array, items: { type: string } }
+        agent_type: { type: string }
+    File:
+      type: object
+      properties:
+        path: { type: string }
+        size: { type: integer }
+        sha256: { type: string, description: Lowercase hex SHA-256 of the file }
+    Version:
+      type: object
+      properties:
+        namespace: { type: string }
+        name: { type: string }
+        version: { type: string }
+        status: { type: string, enum: [published, deprecated] }
+        digest: { type: string, description: 'sha256 over the manifest lines "<path>\0<sha256>\n", sorted by path' }
+        description: { type: string }
+        license: { type: string }
+        tags: { type: array, items: { type: string } }
+        metadata: { type: object, additionalProperties: { type: string } }
+        publisher: { type: string }
+        published_at: { type: string, format: date-time }
+        files: { type: array, items: { $ref: "#/components/schemas/File" } }

@@ -1,0 +1,31 @@
+# Skills Gateway policy. Evaluation is default-deny:
+#   1. if any matching rule has effect deny  -> denied
+#   2. else if any matching rule allows      -> allowed
+#   3. else                                  -> denied
+# Within a subject, every listed field must match; within a list, any value.
+# namespace/name are globs; version is a constraint like ">=1.0.0 <2.0.0".
+version: 1
+rules:
+  - id: admins-everything
+    effect: allow
+    subject: { roles: [platform-admin] }
+    actions: [fetch, publish, deprecate, admin]
+    resource: { namespace: "*", name: "*" }
+
+  - id: everyone-reads-platform
+    effect: allow
+    subject: { any: true }
+    actions: [fetch]
+    resource: { namespace: platform, name: "*" }
+
+  - id: payments-team-owns-payments
+    effect: allow
+    subject: { teams: [payments] }
+    actions: [fetch, publish, deprecate]
+    resource: { namespace: payments, name: "*" }
+
+  - id: internal-skills-not-for-cursor-or-codex
+    effect: deny
+    subject: { agent_types: [cursor, codex] }
+    actions: [fetch]
+    resource: { namespace: platform, name: "internal-*" }

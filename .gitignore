@@ -1,0 +1,33 @@
+# Build output
+/sgw
+/sgw.exe
+/dist/
+
+# Local data
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets and local config: never commit these
+*.env
+.env*
+*.local.yaml
+*.local.json
+secrets*
+*.pem
+*.key
+*.ppk
+sgw.yaml
+!examples/sgw.yaml
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Agent session artifacts
+.claude/
+.cursor/
+.agents/
+.braid/

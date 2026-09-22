@@ -1,0 +1,33 @@
+# Skills Gateway example configuration.
+# Copy to sgw.yaml (gitignored) and adjust. ${VAR} references are read from
+# the environment so tokens and secrets never live in this file.
+listen: 127.0.0.1:8080
+database: skills-gateway.db
+policy: examples/policy.yaml
+max_upload_bytes: 10485760
+
+auth:
+  # oidc   - production: verify JWTs from any OpenID Connect provider
+  # static - development / CI: fixed bearer tokens
+  # none   - trust every request (requires -allow-insecure)
+  mode: static
+  static:
+    - token: ${SGW_ADMIN_TOKEN}
+      subject: alice
+      roles: [platform-admin]
+    - token: ${SGW_DEV_TOKEN}
+      subject: bob
+      teams: [payments]
+      agent_type: claude-code
+
+  # Example: Keycloak. Map a client scope so access tokens carry
+  # aud=skills-gateway, groups, and optionally an sgw_agent claim.
+  oidc:
+    issuer: https://keycloak.example.com/realms/engineering
+    audience: skills-gateway
+    # sub is stable; preferred_username is readable but can be changed in
+    # the IdP. Use sub if policies grant access by user.
+    subject_claim: sub
+    teams_claim: groups
+    roles_claim: realm_access.roles
+    agent_claim: sgw_agent

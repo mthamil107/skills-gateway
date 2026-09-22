@@ -1,0 +1,6 @@
+# Which skills this project uses and which agents it serves.
+# Run: sgw sync   (writes files and sgw-lock.json; commit both)
+formats: [claude, cursor]
+skills:
+  - platform/code-review          # latest published
+  - payments/refund-policy@1.2.0  # pinned; digest locked in sgw-lock.json
