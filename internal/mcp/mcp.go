@@ -445,11 +445,23 @@ func (h *Handler) skillsGet(c *call, params json.RawMessage) (map[string]any, *r
 	return cacheable(c, map[string]any{"skill": l.entry()}), nil
 }
 
+// skillMIME fixes the types of files common in skills, so results do not
+// depend on the host's MIME database (which differs across operating systems).
+var skillMIME = map[string]string{
+	".md": "text/markdown", ".txt": "text/plain", ".py": "text/x-python",
+	".sh": "text/x-shellscript", ".js": "text/javascript", ".ts": "text/x-typescript",
+	".json": "application/json", ".yaml": "application/yaml", ".yml": "application/yaml",
+	".go": "text/x-go", ".html": "text/html", ".css": "text/css", ".csv": "text/csv",
+	".xml": "application/xml", ".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml",
+	".pdf": "application/pdf",
+}
+
 func mimeOf(p string) string {
-	if strings.HasSuffix(p, ".md") {
-		return "text/markdown"
+	ext := strings.ToLower(path.Ext(p))
+	if t, ok := skillMIME[ext]; ok {
+		return t
 	}
-	if t := mime.TypeByExtension(path.Ext(p)); t != "" {
+	if t := mime.TypeByExtension(ext); t != "" {
 		return t
 	}
 	return "application/octet-stream"
