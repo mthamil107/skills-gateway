@@ -1,7 +1,23 @@
 # Demos
 
+Two pictures, both rendered by deterministic Pillow scripts in this folder,
+so they can be regenerated whenever the project changes.
+
+## architecture.png
+
+The one-slide architecture: where skills come from (a folder, a git
+repository, or a publish), what the gateway does (identity, policy,
+registry, audit, store), how skills reach an agent (REST, `sgw sync`, MCP),
+the no-server path, and the four promises the code keeps.
+
+```bash
+python docs/demos/render_architecture.py
+```
+
+## skills-gateway-explainer.gif
+
 `skills-gateway-explainer.gif` is the square explainer used at the top of the
-project README. It walks through eight beats in about twenty-two seconds: a skill
+project README. It walks through nine beats in about twenty-five seconds: a skill
 folder copied by hand to every agent, why that matters, the gateway in the
 middle, one request decided by identity and policy, how a version is
 fingerprinted, and the three ways the same governed catalog is served.
@@ -16,7 +32,7 @@ changed.
 python docs/demos/render_explainer.py
 ```
 
-Output: 1080x1080, 12 fps, ~260 frames, palette-quantised to 64 colours.
+Output: 1080x1080, 12 fps, ~300 frames, palette-quantised to 64 colours.
 
 ## Pacing
 
@@ -35,7 +51,7 @@ merge on export, so a slower GIF costs very little extra size.
 
 ## Editing
 
-Each beat is one function (`beat1` … `beat8`) that draws a full frame, given
+Each beat is one function (`beat1` … `beat9`) that draws a full frame, given
 how many frames into the beat it is. `BEAT_FRAMES_BASE` sets how long each beat runs
 before `SPEED` is applied. `pop()` returns a 0..1 ease for staggering
 elements into view, and scales with `SPEED` too.

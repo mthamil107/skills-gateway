@@ -6,11 +6,12 @@ storyboard beats in ~22 seconds, then loops:
   1. Title / pain statement
   2. One skills folder, copied everywhere
   3. Red pain banner sweeps in
-  4. The gateway inserts itself in the middle
-  5. One request: identity -> policy -> allow/deny
-  6. Every file hashed into one version digest
-  7. One catalog, three ways out
-  8. Hold + CTA caption
+  4. Two ways to use it: with or without a server
+  5. The gateway inserts itself in the middle
+  6. One request: identity -> policy -> allow/deny
+  7. Every file hashed into one version digest
+  8. One catalog, three ways out
+  9. Hold + CTA caption
 
 Pacing lives in SPEED and BEAT_FRAMES_BASE below, not in the beats.
 
@@ -66,18 +67,19 @@ FRAME_MS = int(round(1000 / FPS))
 # a first-time reader can finish the densest beat without pausing. Held
 # frames are pixel-identical, so they merge on export: a slower GIF costs
 # almost nothing in bytes.
-SPEED = 1.8
+SPEED = 2.0
 
 # Base frames per beat at SPEED 1.0, where 12 frames = 1.0s.
 BEAT_FRAMES_BASE = [
-    14,   # B1 title
-    18,   # B2 copied everywhere
-    16,   # B3 pain banner
-    14,   # B4 gateway inserts
-    24,   # B5 one request
-    20,   # B6 digest
-    20,   # B7 three ways out
-    20,   # B8 hold + CTA
+    12,   # B1 title
+    16,   # B2 copied everywhere
+    14,   # B3 pain banner
+    20,   # B4 two ways to use it
+    14,   # B5 gateway inserts
+    22,   # B6 one request
+    18,   # B7 digest
+    18,   # B8 three ways out
+    18,   # B9 hold + CTA
 ]
 BEAT_FRAMES = [int(round(b * SPEED)) for b in BEAT_FRAMES_BASE]
 TOTAL_FRAMES = sum(BEAT_FRAMES)
@@ -360,10 +362,61 @@ def beat3(d, fonts, f: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Beat 4 - the gateway inserts itself
+# Beat 5 - the gateway inserts itself
 # ---------------------------------------------------------------------------
 
 def beat4(d, fonts, f: int) -> None:
+    """Two ways to use it: the same result, with or without a server."""
+    page_frame(d, fonts, "start with a repo; add the gateway when you need it")
+    text_center(d, "Two ways to use it", WIDTH // 2, 126, fonts["h2"], FG)
+
+    panels = [
+        (70, "WITHOUT A SERVER", DIM, [
+            ("a folder", "path: ../team-skills"),
+            ("a git repo", "git: github.com/acme/skills"),
+        ], "sgw sync"),
+        (560, "WITH THE GATEWAY", TEAL, [
+            ("identity", "who is asking"),
+            ("policy", "what they may load"),
+        ], "sgw sync  ·  REST  ·  MCP"),
+    ]
+    for i, (x, title, color, rows, foot) in enumerate(panels):
+        t = pop(f, 1 + i * 3)
+        if t <= 0.05:
+            continue
+        rect = (x, 200, x + 450, 560)
+        box(d, rect, radius=20, fill=blend(BG, TEAL_LIGHT if i == 1 else (255, 254, 251), 0.7 * t),
+            outline=blend(BG, color if i == 1 else SOFT, t), width=4 if i == 1 else 3)
+        text_center(d, title, x + 225, rect[1] + 48, fonts["label"], blend(BG, color, t))
+        for j, (name, detail) in enumerate(rows):
+            y = rect[1] + 116 + j * 96
+            tt = pop(f, 2 + i * 3 + j)
+            if tt <= 0.05:
+                continue
+            text_center(d, name, x + 225, y, fonts["h3"], blend(BG, FG, tt))
+            text_center(d, detail, x + 225, y + 40, fonts["mono_small"], blend(BG, DIM, tt))
+        tf = pop(f, 4 + i * 3)
+        if tf > 0:
+            text_center(d, foot, x + 225, rect[3] - 40, fonts["small"], blend(BG, color, tf))
+
+    t2 = pop(f, 9)
+    if t2 > 0:
+        arrow(d, 295, 570, 520, 640, blend(BG, DIM, t2), width=3)
+        arrow(d, 785, 570, 560, 640, blend(BG, TEAL, t2), width=3)
+        box(d, (150, 650, 930, 780), radius=20, fill=blend(BG, (255, 254, 251), t2),
+            outline=blend(BG, FG, t2), width=3)
+        text_center(d, "the same folders, the same digests", WIDTH // 2, 692, fonts["h3"], blend(BG, FG, t2))
+        text_center(d, ".claude/skills   .cursor/skills   .agents/skills",
+                    WIDTH // 2, 736, fonts["mono_small"], blend(BG, DIM, pop(f, 12)))
+        text_center(d, "+ sgw-lock.json", WIDTH // 2, 766, fonts["tiny"], blend(BG, DIM, pop(f, 13)))
+
+    t3 = pop(f, 15)
+    if t3 > 0:
+        text_center(d, "the gateway adds who may have what, not a different result",
+                    WIDTH // 2, 850, fonts["body"], blend(BG, DIM, t3))
+
+
+def beat5(d, fonts, f: int) -> None:
     page_frame(d, fonts, "publish once - the gateway hands it out")
     text_center(d, "Put one governed hop in the middle", WIDTH // 2, 132, fonts["h2"], FG)
 
@@ -396,10 +449,10 @@ def beat4(d, fonts, f: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Beat 5 - one request
+# Beat 6 - one request
 # ---------------------------------------------------------------------------
 
-def beat5(d, fonts, f: int) -> None:
+def beat6(d, fonts, f: int) -> None:
     page_frame(d, fonts, "denied looks exactly like missing - the policy leaks nothing")
     text_center(d, "Every single fetch is decided", WIDTH // 2, 120, fonts["h2"], FG)
 
@@ -461,10 +514,10 @@ def beat5(d, fonts, f: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Beat 6 - digest
+# Beat 7 - digest
 # ---------------------------------------------------------------------------
 
-def beat6(d, fonts, f: int) -> None:
+def beat7(d, fonts, f: int) -> None:
     page_frame(d, fonts, "re-zip it anywhere: same files, same digest")
     text_center(d, "A version is frozen and fingerprinted", WIDTH // 2, 130, fonts["h2"], FG)
 
@@ -512,10 +565,10 @@ def beat6(d, fonts, f: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Beat 7 - three ways out
+# Beat 8 - three ways out
 # ---------------------------------------------------------------------------
 
-def beat7(d, fonts, f: int) -> None:
+def beat8(d, fonts, f: int) -> None:
     page_frame(d, fonts, "MCP: the Skills Extension, SEP-2640")
     text_center(d, "One governed catalog, three ways out", WIDTH // 2, 130, fonts["h2"], FG)
 
@@ -562,10 +615,10 @@ def beat7(d, fonts, f: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Beat 8 - hold + CTA
+# Beat 9 - hold + CTA
 # ---------------------------------------------------------------------------
 
-def beat8(d, fonts, f: int) -> None:
+def beat9(d, fonts, f: int) -> None:
     page_frame(d, fonts)
     t = pop(f, 0)
     text_center(d, "Skills Gateway", WIDTH // 2, 300, fonts["h1"], blend(BG, TEAL, t))
@@ -583,6 +636,7 @@ def beat8(d, fonts, f: int) -> None:
         ("immutable, digest-verified versions", "end to end, with a lock file", AMBER),
         ("append-only audit", "who loaded what, and when", GREEN),
         ("REST · native sync · MCP SEP-2640", "one catalog, every agent", TEAL),
+        ("a folder, a git repo, or the gateway", "same folders either way", DIM),
     ]
     for i, (left, right, color) in enumerate(rows):
         tt = pop(f, 4 + i)
@@ -598,7 +652,7 @@ def beat8(d, fonts, f: int) -> None:
         pill(
             d,
             WIDTH // 2,
-            840,
+            866,
             "github.com/mthamil107/skills-gateway",
             fonts["label"],
             blend(BG, TEAL, t2),
@@ -608,10 +662,10 @@ def beat8(d, fonts, f: int) -> None:
         )
     t3 = pop(f, 13)
     if t3 > 0:
-        text_center(d, "Apache-2.0  ·  one Go binary", WIDTH // 2, 916, fonts["small"], blend(BG, DIM, t3))
+        text_center(d, "Apache-2.0  ·  one Go binary", WIDTH // 2, 942, fonts["small"], blend(BG, DIM, t3))
 
 
-BEATS = [beat1, beat2, beat3, beat4, beat5, beat6, beat7, beat8]
+BEATS = [beat1, beat2, beat3, beat4, beat5, beat6, beat7, beat8, beat9]
 
 
 # ---------------------------------------------------------------------------

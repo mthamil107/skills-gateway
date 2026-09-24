@@ -41,6 +41,10 @@ Skills Gateway adds that layer, and it is small enough to run as one binary:
 
 ## How it works
 
+<p align="center">
+  <img alt="Skills Gateway architecture: skills come from a folder, a git repository or a publish to the gateway; the gateway applies identity (OIDC), a default-deny policy, an immutable registry with SHA-256 digests and an append-only audit, over SQLite; skills reach agents over REST, sgw sync and MCP SEP-2640; without a server the same sync installs the same folders with the same digests" src="docs/demos/architecture.png" width="900">
+</p>
+
 ### One request, from token to answer
 
 Every request walks the same four steps. A caller who may not have a skill is told it does not exist, so the policy itself cannot be used to discover what is hidden.
