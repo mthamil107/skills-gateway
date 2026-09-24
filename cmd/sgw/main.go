@@ -25,6 +25,7 @@ import (
 	"github.com/mthamil107/skills-gateway/internal/policy"
 	"github.com/mthamil107/skills-gateway/internal/registry"
 	"github.com/mthamil107/skills-gateway/internal/server"
+	"github.com/mthamil107/skills-gateway/internal/source"
 	"github.com/mthamil107/skills-gateway/internal/store/sqlite"
 	"github.com/mthamil107/skills-gateway/internal/syncer"
 	"github.com/mthamil107/skills-gateway/internal/translate"
@@ -38,16 +39,26 @@ const usage = `sgw — Skills Gateway %s
 Server:
   sgw serve -config sgw.yaml [-allow-insecure]
 
-Client (uses $SGW_URL and $SGW_TOKEN):
+Install skills (no server needed - the source is named in the manifest):
+  sgw sync     [-file sgw-sync.yaml] [-out .]     into a project
+  sgw sync     -out ~                             into your home directory,
+                                                  where every agent reads it
+  sgw fetch    <ref> [-format claude] [-out .]    one skill
+      -path <dir> / -git <url> [-ref <r>] [-dir <d>]   source for fetch
+
+Talk to a gateway (uses $SGW_URL and $SGW_TOKEN):
   sgw publish  <skill-dir> -ns <namespace> -version <semver>
   sgw list     [-ns <namespace>] [-q <text>] [-tag <tag>]
   sgw get      <ns>/<name>[@version]
-  sgw fetch    <ns>/<name>[@version] [-format claude] [-out .]
-  sgw sync     [-file sgw-sync.yaml] [-out .]
   sgw deprecate <ns>/<name>@<version>
   sgw audit    [-since 2026-09-01T00:00:00Z]
   sgw formats
   sgw version
+
+A sync manifest names exactly one source:
+  gateway: https://skills.example.com   # or omit and set $SGW_URL
+  path: ../team-skills                  # a folder of skill directories
+  git: https://github.com/acme/skills   # with optional ref: and dir:
 `
 
 func main() {
@@ -170,6 +181,49 @@ func newClient() (*client.Client, error) {
 		return nil, errors.New("set SGW_URL to the gateway base URL, e.g. http://127.0.0.1:8080")
 	}
 	return &client.Client{BaseURL: u, Token: os.Getenv("SGW_TOKEN"), HTTP: &http.Client{Timeout: 60 * time.Second}}, nil
+}
+
+// sourceFor builds the source named by the flags, defaulting to the
+// gateway in $SGW_URL.
+func sourceFor(ctx context.Context, path, gitURL, gitRef, gitDir string) (source.Source, error) {
+	switch {
+	case path != "" && gitURL != "":
+		return nil, errors.New("use -path or -git, not both")
+	case path != "":
+		return &source.Dir{Root: expandHome(path)}, nil
+	case gitURL != "":
+		return source.NewGit(ctx, source.GitOptions{URL: gitURL, Ref: gitRef, Dir: gitDir})
+	default:
+		return gatewaySource("")
+	}
+}
+
+// gatewaySource builds a gateway source for url, or for $SGW_URL.
+func gatewaySource(url string) (source.Source, error) {
+	c, err := newClient()
+	if err != nil {
+		return nil, err
+	}
+	if url != "" {
+		c.BaseURL = url
+	}
+	return &source.Gateway{Client: c}, nil
+}
+
+// expandHome turns a leading "~" into the user's home directory, so
+// `sgw sync -out ~` works the same way in every shell.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
 }
 
 // parseRef splits "ns/name[@version]"; version defaults to "latest".
@@ -330,50 +384,58 @@ func get(args []string) error {
 func fetch(args []string) error {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
 	format := fs.String("format", "claude", "agent format (see: sgw formats)")
-	out := fs.String("out", ".", "project root to write into")
+	out := fs.String("out", ".", "root to write into (\"~\" for every agent's global folder)")
+	path := fs.String("path", "", "read skills from this folder instead of a gateway")
+	gitURL := fs.String("git", "", "read skills from this git repository")
+	gitRef := fs.String("ref", "", "git branch, tag or commit")
+	gitDir := fs.String("dir", "", "subdirectory of the git repository holding the skills")
 	pos, err := flagsAfter(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 1 {
-		return errors.New("usage: sgw fetch <ns>/<name>[@version] [-format claude] [-out .]")
+		return errors.New("usage: sgw fetch <[ns/]name[@version]> [-format claude] [-out .] [-path dir | -git url]")
 	}
-	ns, name, ver, err := parseRef(pos[0])
+	ref, err := source.ParseRef(pos[0])
 	if err != nil {
 		return err
 	}
-	c, err := newClient()
+	ctx := context.Background()
+	src, err := sourceFor(ctx, *path, *gitURL, *gitRef, *gitDir)
 	if err != nil {
 		return err
 	}
-	res, err := syncer.Install(context.Background(), c, translate.Default(), *out, ns, name, ver, []string{*format})
+	res, err := syncer.Install(ctx, src, translate.Default(), expandHome(*out), ref, []string{*format})
 	if err != nil {
 		return err
 	}
 	for _, w := range res.Warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
-	fmt.Printf("installed %s/%s@%s (%s) — %d file(s) written\n", ns, name, res.Version, res.Digest, len(res.Written))
+	fmt.Printf("installed %s@%s (%s) from %s — %d file(s) written\n",
+		ref, res.Version, res.Digest, src.Describe(), len(res.Written))
 	return nil
 }
 
 func syncCmd(args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	file := fs.String("file", "sgw-sync.yaml", "sync manifest")
-	out := fs.String("out", ".", "project root to write into")
+	out := fs.String("out", ".", "root to write into (\"~\" for every agent's global folder)")
 	fs.Parse(args)
 	m, err := syncer.LoadManifest(*file)
 	if err != nil {
 		return err
 	}
-	c, err := newClient()
+	ctx := context.Background()
+	src, err := m.Source(ctx, filepath.Dir(*file), gatewaySource)
 	if err != nil {
 		return err
 	}
-	rep, err := syncer.Sync(context.Background(), c, translate.Default(), *out, m)
+	rep, err := syncer.Sync(ctx, src, translate.Default(), expandHome(*out), m)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("source %s\n", src.Describe())
 	for _, w := range rep.Warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}

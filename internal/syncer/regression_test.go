@@ -40,7 +40,7 @@ rules:
 		t.Fatalf("get latest = %s, %v", v.Version, err)
 	}
 	root := t.TempDir()
-	rep, err := Sync(ctx, reader, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
+	rep, err := Sync(ctx, gw(reader), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
 	if err != nil || rep.Skills[0].Version != "1.0.0" {
 		t.Fatalf("sync = %+v, %v", rep.Skills, err)
 	}
@@ -54,7 +54,7 @@ rules:
 func TestPinAppliesToLatestRefs(t *testing.T) {
 	_, c, root := setup(t)
 	m := &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}}
-	if _, err := Sync(ctx, c, translate.Default(), root, m); err != nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, m); err != nil {
 		t.Fatal(err)
 	}
 	lockPath := filepath.Join(root, LockFile)
@@ -64,7 +64,7 @@ func TestPinAppliesToLatestRefs(t *testing.T) {
 	l.Skills[0].Digest = "sha256:" + strings.Repeat("0", 64)
 	data, _ = json.Marshal(l)
 	os.WriteFile(lockPath, data, 0o644)
-	if _, err := Sync(ctx, c, translate.Default(), root, m); err == nil || !strings.Contains(err.Error(), "does not match the pinned") {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, m); err == nil || !strings.Contains(err.Error(), "does not match the pinned") {
 		t.Fatalf("expected pin mismatch for latest ref, got %v", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestSyncRefusesSymlinkedDirectory(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, ".claude")); err != nil {
 		t.Skipf("cannot create symlinks here: %v", err)
 	}
-	_, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
+	_, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
 	if err == nil {
 		t.Fatal("sync wrote through a symlinked directory")
 	}

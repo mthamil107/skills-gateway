@@ -163,3 +163,32 @@ func TestParseDashesInsideYAMLValue(t *testing.T) {
 		t.Fatalf("empty frontmatter should fail validation, not termination: %v", err)
 	}
 }
+
+// Real skills often carry an unquoted description with a colon in it.
+// Agents accept those, so the gateway must too.
+func TestParseRepairsUnquotedColonInDescription(t *testing.T) {
+	md := "---\nname: demo\ndescription: Does everything: screens, menus and routes\n---\nbody\n"
+	sk, err := Parse([]byte(md))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sk.Description != "Does everything: screens, menus and routes" {
+		t.Fatalf("description = %q", sk.Description)
+	}
+	raw, err := RawFrontmatter([]byte(md))
+	if err != nil || raw["description"] != sk.Description {
+		t.Fatalf("raw = %v, %v", raw, err)
+	}
+	// A nested block still parses, and a genuinely broken document still fails.
+	nested := "---\nname: demo\ndescription: a: b\nagents:\n  cursor:\n    globs: [\"*.go\"]\n---\n"
+	sk2, err := Parse([]byte(nested))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sk2.Hint("cursor", "globs") == nil {
+		t.Error("nested agents hint lost during repair")
+	}
+	if _, err := Parse([]byte("---\nname: demo\n  bad-indent: x\n   worse: y\n---\n")); err == nil {
+		t.Error("a genuinely malformed document should still fail")
+	}
+}

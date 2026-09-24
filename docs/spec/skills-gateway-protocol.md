@@ -156,15 +156,27 @@ Note that SEP-2640 digests are per file over raw bytes, while the bundle digest 
 
 ## 10. Sync
 
-`sgw sync` reads `sgw-sync.yaml` (formats and skill references). For each skill it MUST:
+`sgw sync` reads `sgw-sync.yaml`, which names one **source**, the agent formats to write, and the skills to install. A source is one of:
 
-1. resolve the reference to a concrete version once, and then download that exact version's bundle;
-2. verify the bundle digest against the server's advertised digest, and against the digest pinned in `sgw-lock.json` when the lock pins the same exact version;
-3. translate locally from the verified bytes (the server's translate endpoint is a convenience and is never trusted for installation);
-4. refuse any output path that is not a clean relative path inside the project, and refuse to write through symbolic links;
+| Source | Declared as | Immutability |
+|---|---|---|
+| Gateway | `gateway:` (or `$SGW_URL`) | published versions never change, so a recorded digest is binding |
+| Directory | `path:` | content may change, so a new digest is recorded, not rejected |
+| Git repository | `git:`, with optional `ref:` and `dir:` | a tag or commit is binding; a branch may move |
+
+A source MUST expose, for each skill, the complete file set and a digest computed as in §4.2. A client MUST recompute that digest from the files it received and reject a mismatch. `skills: ["*"]` means every skill the source offers.
+
+For each skill sync MUST:
+
+1. resolve the reference to a concrete version once, and then fetch that exact version;
+2. verify the recomputed digest against the digest the source advertises, and against the digest pinned in `sgw-lock.json` when the lock recorded the same version **and the source promises immutability**;
+3. translate locally from the verified bytes (a gateway's translate endpoint is a convenience and is never trusted for installation);
+4. refuse any output path that is not a clean relative path inside the output root, and refuse to write through symbolic links;
 5. detect two skills writing the same path, **before writing anything**.
 
-After writing, sync removes files that the previous lock recorded and this run no longer produces, but only if they are unchanged since sync wrote them. Locally modified files are kept and reported.
+After writing, sync removes files that the previous lock recorded and this run no longer produces, but only if they are unchanged since sync wrote them. Locally modified files are kept and reported. The lock records the source, version, digest and per-file hashes.
+
+The output root is the project by default, and may be the user's home directory, where every agent reads skills for every project.
 
 ### 10.1 Formats
 

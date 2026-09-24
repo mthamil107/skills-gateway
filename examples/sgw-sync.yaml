@@ -1,6 +1,23 @@
 # Which skills this project uses and which agents it serves.
-# Run: sgw sync   (writes files and sgw-lock.json; commit both)
+#
+# Name exactly one source. Leave all three out to use the gateway in
+# $SGW_URL. Run `sgw sync` for this project, or `sgw sync -out ~` to install
+# into the home directory that every agent reads, for every repository.
+# The lock file is written next to the output root (~/sgw-lock.json for -out ~).
+#
+# Never put credentials in a git URL: use git's own credential helper. The
+# URL is recorded in the lock file, with any credentials stripped.
+
+# path: ../team-skills                  # a folder of SKILL.md directories
+# git: https://github.com/acme/skills   # a repository, optionally:
+# ref: main                             #   branch, tag or commit
+# dir: skills                           #   subdirectory holding the skills
+gateway: http://127.0.0.1:8080
+
 formats: [claude, cursor]
+
+# "*" takes everything the source offers. A gateway reference is
+# namespace/name; a folder or repository reference is just the name.
 skills:
   - platform/code-review          # latest published
   - payments/refund-policy@1.2.0  # pinned; digest locked in sgw-lock.json

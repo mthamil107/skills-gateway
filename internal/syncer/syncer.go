@@ -1,9 +1,14 @@
-// Package syncer installs skills from a gateway into a project directory
-// in each agent's native layout ("push/sync" delivery).
+// Package syncer installs skills into a project, or into a developer's
+// home directory, in each agent's native layout.
 //
-// Integrity is end to end: the bundle is downloaded, its digest verified
-// against the server's advertised digest (and the lock file's pin, when
-// present), and translation happens locally from the verified bytes.
+// The skills come from a source.Source: a governed gateway, a directory on
+// disk, or a Git repository. The rest of the work is identical whichever
+// it is, so a team can start with a repo and move to a gateway later
+// without changing formats, output paths or the lock file.
+//
+// Integrity is end to end: files are verified against the digest the
+// source advertises and against the lock file's pin when the source
+// promises immutability, and translation happens locally from those bytes.
 package syncer
 
 import (
@@ -21,8 +26,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/mthamil107/skills-gateway/internal/bundle"
-	"github.com/mthamil107/skills-gateway/internal/client"
 	"github.com/mthamil107/skills-gateway/internal/skill"
+	"github.com/mthamil107/skills-gateway/internal/source"
 	"github.com/mthamil107/skills-gateway/internal/translate"
 )
 
@@ -30,10 +35,53 @@ import (
 // remove files that are no longer wanted. Commit it.
 const LockFile = "sgw-lock.json"
 
-// Manifest is the sgw-sync.yaml file.
+// Manifest is the sgw-sync.yaml file. Exactly one source may be named;
+// with none, the gateway in $SGW_URL is used.
 type Manifest struct {
+	// Gateway is a Skills Gateway base URL. Empty means $SGW_URL.
+	Gateway string `yaml:"gateway"`
+	// Path is a directory of skill folders - no server involved.
+	Path string `yaml:"path"`
+	// Git is a repository of skill folders, with an optional ref and
+	// subdirectory.
+	Git    string `yaml:"git"`
+	Ref    string `yaml:"ref"`
+	GitDir string `yaml:"dir"`
+
 	Formats []string `yaml:"formats"` // e.g. [claude, cursor]
-	Skills  []string `yaml:"skills"`  // "ns/name" or "ns/name@1.2.3"
+	// Skills lists references, or a single "*" for everything the source
+	// offers. A gateway reference is "ns/name[@version]"; a path or git
+	// reference is just "name".
+	Skills []string `yaml:"skills"`
+}
+
+// Source builds the source this manifest names. base is the directory the
+// manifest was read from, so a relative path resolves against it.
+func (m *Manifest) Source(ctx context.Context, base string, newGateway func(url string) (source.Source, error)) (source.Source, error) {
+	named := 0
+	for _, v := range []string{m.Gateway, m.Path, m.Git} {
+		if v != "" {
+			named++
+		}
+	}
+	if named > 1 {
+		return nil, fmt.Errorf("name only one of gateway, path or git")
+	}
+	switch {
+	case m.Path != "":
+		dir := expandHome(m.Path)
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(base, filepath.FromSlash(dir))
+		}
+		if _, err := os.Stat(dir); err != nil {
+			return nil, fmt.Errorf("path source: %w", err)
+		}
+		return &source.Dir{Root: dir}, nil
+	case m.Git != "":
+		return source.NewGit(ctx, source.GitOptions{URL: m.Git, Ref: m.Ref, Dir: m.GitDir})
+	default:
+		return newGateway(m.Gateway)
+	}
 }
 
 // LoadManifest reads and validates a sync manifest.
@@ -51,7 +99,25 @@ func LoadManifest(path string) (*Manifest, error) {
 	if len(m.Formats) == 0 || len(m.Skills) == 0 {
 		return nil, fmt.Errorf("%s: formats and skills are both required", path)
 	}
+	if (m.Ref != "" || m.GitDir != "") && m.Git == "" {
+		return nil, fmt.Errorf("%s: ref and dir apply to a git source", path)
+	}
 	return &m, nil
+}
+
+// expandHome turns a leading "~" into the user's home directory.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
 }
 
 // Lock is the on-disk lock file.
@@ -62,6 +128,7 @@ type Lock struct {
 // LockedSkill is one synced skill.
 type LockedSkill struct {
 	Ref     string       `json:"ref"` // as written in the manifest
+	Source  string       `json:"source,omitempty"`
 	Version string       `json:"version"`
 	Digest  string       `json:"digest"`
 	Files   []LockedFile `json:"files"`
@@ -86,50 +153,50 @@ type prepared struct {
 	files []translate.OutFile
 }
 
-// Install downloads, verifies, translates and writes one skill.
-func Install(ctx context.Context, c *client.Client, reg translate.Registry, root, ns, name, version string, formats []string) (Installed, error) {
-	p, err := prepare(ctx, c, reg, ns, name, version, nil, formats)
+// Install resolves, verifies, translates and writes one skill.
+func Install(ctx context.Context, src source.Source, reg translate.Registry, root string, ref source.Ref, formats []string) (Installed, error) {
+	p, err := prepare(ctx, src, reg, ref, nil, formats)
 	if err != nil {
 		return p.Installed, err
 	}
 	return p.Installed, writeAll(root, p.files)
 }
 
-// prepare downloads, verifies and translates one skill without writing.
-func prepare(ctx context.Context, c *client.Client, reg translate.Registry, ns, name, version string, pin *LockedSkill, formats []string) (prepared, error) {
+// prepare resolves, verifies and translates one skill without writing.
+func prepare(ctx context.Context, src source.Source, reg translate.Registry, ref source.Ref, pin *LockedSkill, formats []string) (prepared, error) {
 	var res prepared
-	// Resolve "latest" once, then fetch that exact version, so a publish
-	// between the two calls cannot mix versions.
-	meta, err := c.Get(ctx, ns, name, version)
-	if err != nil {
-		return res, fmt.Errorf("%s/%s@%s: %w", ns, name, version, err)
-	}
-	b, err := c.Bundle(ctx, ns, name, meta.Version)
-	if err != nil {
-		return res, fmt.Errorf("%s/%s@%s: %w", ns, name, meta.Version, err)
-	}
-	if meta.Digest != b.Digest {
-		return res, fmt.Errorf("%s/%s: metadata digest %s differs from bundle digest %s", ns, name, meta.Digest, b.Digest)
-	}
-	// Versions are immutable: if the lock recorded this exact version, its
-	// digest must not have changed. A "latest" ref may move to a new
-	// version, which is then pinned afresh.
-	if pin != nil && pin.Version == meta.Version && pin.Digest != b.Digest {
-		return res, fmt.Errorf("%s/%s@%s: digest %s does not match the pinned %s in %s; published versions are immutable, so this indicates tampering or a changed server",
-			ns, name, meta.Version, b.Digest, pin.Digest, LockFile)
-	}
-	md, _ := b.File("SKILL.md")
-	sk, err := skill.Parse(md.Content)
+	sk, err := src.Resolve(ctx, ref)
 	if err != nil {
 		return res, err
 	}
-	res.Version, res.Digest = meta.Version, b.Digest
+	b := bundle.FromFiles(sk.Files)
+	if b.Digest != sk.Digest {
+		return res, fmt.Errorf("%s: digest %s does not match the received files (%s)", ref, sk.Digest, b.Digest)
+	}
+	// A fixed source (a git tag or commit) must keep resolving to the same
+	// version. If it does not, the tag was moved under us.
+	if pin != nil && src.Fixed() && pin.Source == src.Describe() && pin.Version != sk.Version {
+		return res, fmt.Errorf("%s: %s is pinned, but it now resolves to %s while %s records %s; the tag or ref was rewritten",
+			ref, src.Describe(), sk.Version, LockFile, pin.Version)
+	}
+	// A source that promises immutability must never change a recorded
+	// version's content. A folder or a moving branch legitimately does.
+	if pin != nil && src.Pinnable() && pin.Version == sk.Version && pin.Digest != b.Digest {
+		return res, fmt.Errorf("%s@%s: digest %s does not match the pinned %s in %s; this version was published as immutable, so this indicates tampering or a changed source",
+			ref, sk.Version, b.Digest, pin.Digest, LockFile)
+	}
+	md, _ := b.File("SKILL.md")
+	parsed, err := skill.Parse(md.Content)
+	if err != nil {
+		return res, fmt.Errorf("%s: %w", ref, err)
+	}
+	res.Version, res.Digest = sk.Version, b.Digest
 	for _, f := range formats {
 		tr, ok := reg[f]
 		if !ok {
 			return res, fmt.Errorf("unknown format %q", f)
 		}
-		out, err := tr.Translate(sk, b.Files)
+		out, err := tr.Translate(parsed, b.Files)
 		if err != nil {
 			return res, err
 		}
@@ -238,9 +305,13 @@ type Report struct {
 
 // Sync installs every skill in the manifest, pins digests in the lock file
 // and removes files a previous sync wrote that are no longer produced.
-func Sync(ctx context.Context, c *client.Client, reg translate.Registry, root string, m *Manifest) (Report, error) {
+func Sync(ctx context.Context, src source.Source, reg translate.Registry, root string, m *Manifest) (Report, error) {
 	var rep Report
 	old, err := readLock(root)
+	if err != nil {
+		return rep, err
+	}
+	wanted, err := refs(ctx, src, m.Skills)
 	if err != nil {
 		return rep, err
 	}
@@ -251,16 +322,13 @@ func Sync(ctx context.Context, c *client.Client, reg translate.Registry, root st
 	owner := map[string]string{} // output path -> skill ref, to catch collisions
 	var lock Lock
 	var all []translate.OutFile
-	for _, ref := range m.Skills {
-		ns, name, ver, err := parseRef(ref)
-		if err != nil {
-			return rep, err
-		}
+	for _, r := range wanted {
+		ref := r.String()
 		var pin *LockedSkill
 		if p, ok := pins[ref]; ok {
 			pin = &p
 		}
-		res, err := prepare(ctx, c, reg, ns, name, ver, pin, m.Formats)
+		res, err := prepare(ctx, src, reg, r, pin, m.Formats)
 		if err != nil {
 			return rep, err
 		}
@@ -273,7 +341,10 @@ func Sync(ctx context.Context, c *client.Client, reg translate.Registry, root st
 		rep.Warnings = append(rep.Warnings, res.Warnings...)
 		rep.Written += len(res.Written)
 		all = append(all, res.files...)
-		lock.Skills = append(lock.Skills, LockedSkill{Ref: ref, Version: res.Version, Digest: res.Digest, Files: res.Written})
+		lock.Skills = append(lock.Skills, LockedSkill{
+			Ref: ref, Source: src.Describe(), Version: res.Version,
+			Digest: res.Digest, Files: res.Written,
+		})
 	}
 	// Nothing is written until every skill has been fetched, verified and
 	// checked for collisions.
@@ -320,17 +391,31 @@ func pruneEmpty(root, dir string) {
 	}
 }
 
-func parseRef(ref string) (ns, name, ver string, err error) {
-	ver = "latest"
-	orig := ref
-	if i := strings.LastIndexByte(ref, '@'); i > 0 {
-		ref, ver = ref[:i], ref[i+1:]
+// refs turns the manifest's skill list into concrete references. A single
+// "*" means everything the source offers.
+func refs(ctx context.Context, src source.Source, list []string) ([]source.Ref, error) {
+	if len(list) == 1 && strings.TrimSpace(list[0]) == "*" {
+		all, err := src.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if len(all) == 0 {
+			return nil, fmt.Errorf("%s offers no skills", src.Describe())
+		}
+		return all, nil
 	}
-	parts := strings.Split(ref, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || ver == "" {
-		return "", "", "", fmt.Errorf("skill reference must be <namespace>/<name>[@version], got %q", orig)
+	out := make([]source.Ref, 0, len(list))
+	for _, item := range list {
+		if strings.TrimSpace(item) == "*" {
+			return nil, fmt.Errorf(`"*" must be the only entry in skills`)
+		}
+		r, err := source.ParseRef(item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
-	return parts[0], parts[1], ver, nil
+	return out, nil
 }
 
 func readLock(root string) (Lock, error) {

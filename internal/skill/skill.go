@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -50,7 +51,7 @@ func Parse(data []byte) (*Skill, error) {
 		return nil, err
 	}
 	var fm Frontmatter
-	if err := yaml.Unmarshal([]byte(header), &fm); err != nil {
+	if err := unmarshalFrontmatter(header, &fm); err != nil {
 		return nil, fmt.Errorf("SKILL.md frontmatter: %w", err)
 	}
 	if !ValidName(fm.Name) {
@@ -83,10 +84,87 @@ func RawFrontmatter(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 	var m map[string]any
-	if err := yaml.Unmarshal([]byte(header), &m); err != nil {
+	if err := unmarshalFrontmatter(header, &m); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// plainValue matches a "key: value" line whose value is an unquoted plain
+// scalar, the only case the repair below touches.
+var plainValue = regexp.MustCompile(`^(\s*)([A-Za-z0-9_.\-]+):[ \t]+(\S.*?)\s*$`)
+
+// blockOpener matches any line that starts a literal or folded block,
+// including one under a list item.
+var blockOpener = regexp.MustCompile(`(^|\s)(-\s*)?[|>][-+0-9]*\s*$`)
+
+// trailingComment matches a YAML comment at the end of a plain value.
+var trailingComment = regexp.MustCompile(`\s+#.*$`)
+
+// unmarshalFrontmatter parses the frontmatter, repairing the one mistake
+// real skills make often enough to matter: a plain, unquoted description
+// that contains a colon followed by a space ("covers everything: screens,
+// menus"). Strict YAML reads that as a nested mapping and fails, while the
+// agents' own lenient parsers accept it, so refusing the file would reject
+// skills that work today. Nothing else is rewritten, and a document that
+// parses as written is never touched.
+func unmarshalFrontmatter(header string, out any) error {
+	first := yaml.Unmarshal([]byte(header), out)
+	if first == nil {
+		return nil
+	}
+	lines := strings.Split(header, "\n")
+	repaired := make([]string, len(lines))
+	changed := false
+	// A block scalar's body is content, not YAML: everything indented under
+	// the line that opened it must be left exactly as written. A list item
+	// ("- |") opens one just as a key ("note: |") does.
+	blockIndent := -1
+	for i, line := range lines {
+		repaired[i] = line
+		if blockIndent >= 0 {
+			if strings.TrimSpace(line) == "" || indentOf(line) > blockIndent {
+				continue
+			}
+			blockIndent = -1
+		}
+		if blockOpener.MatchString(line) {
+			blockIndent = indentOf(line)
+			continue
+		}
+		m := plainValue.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		// A trailing comment is not part of the value, so it must not be
+		// swallowed into the quoted scalar.
+		value := trailingComment.ReplaceAllString(m[3], "")
+		if !strings.Contains(value, ": ") && !strings.HasSuffix(value, ":") {
+			continue
+		}
+		switch value[0] {
+		case '"', '\'', '&', '*', '[', '{', '#', '!', '%', '@', '`':
+			continue // already quoted, or a YAML construct we must not touch
+		}
+		quoted, err := yaml.Marshal(value)
+		if err != nil {
+			continue
+		}
+		repaired[i] = m[1] + m[2] + ": " + strings.TrimRight(string(quoted), "\n")
+		changed = true
+	}
+	if !changed {
+		return first
+	}
+	if err := yaml.Unmarshal([]byte(strings.Join(repaired, "\n")), out); err != nil {
+		return first // report the original problem, not the repair's
+	}
+	return nil
+}
+
+// indentOf counts the leading blanks of a line.
+func indentOf(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " 	"))
 }
 
 // split separates the YAML frontmatter from the body. The frontmatter opens

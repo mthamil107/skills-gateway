@@ -16,10 +16,14 @@ import (
 
 	"github.com/mthamil107/skills-gateway/internal/client"
 	"github.com/mthamil107/skills-gateway/internal/gatewaytest"
+	"github.com/mthamil107/skills-gateway/internal/source"
 	"github.com/mthamil107/skills-gateway/internal/translate"
 )
 
 var ctx = context.Background()
+
+// gw wraps a REST client as a source, the way the CLI does.
+func gw(c *client.Client) source.Source { return &source.Gateway{Client: c} }
 
 func setup(t *testing.T) (*gatewaytest.Gateway, *client.Client, string) {
 	t.Helper()
@@ -70,7 +74,7 @@ func listFiles(t *testing.T, root string) []string {
 func TestSyncWritesNativeLayoutsAndLock(t *testing.T) {
 	_, c, root := setup(t)
 	m := &Manifest{Formats: []string{"claude", "cursor-rules"}, Skills: []string{"platform/demo"}}
-	rep, err := Sync(ctx, c, translate.Default(), root, m)
+	rep, err := Sync(ctx, gw(c), translate.Default(), root, m)
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -115,7 +119,7 @@ func TestSyncWritesNativeLayoutsAndLock(t *testing.T) {
 	}
 	// A second identical sync is a no-op that rewrites the same lock.
 	before := read(t, root, LockFile)
-	rep, err = Sync(ctx, c, translate.Default(), root, m)
+	rep, err = Sync(ctx, gw(c), translate.Default(), root, m)
 	if err != nil || rep.Removed != 0 || read(t, root, LockFile) != before {
 		t.Errorf("idempotent sync: %+v %v", rep, err)
 	}
@@ -124,7 +128,7 @@ func TestSyncWritesNativeLayoutsAndLock(t *testing.T) {
 func TestSyncRemovesStaleFilesAfterManifestShrink(t *testing.T) {
 	_, c, root := setup(t)
 	full := &Manifest{Formats: []string{"claude", "cursor-rules"}, Skills: []string{"platform/demo", "platform/other"}}
-	if _, err := Sync(ctx, c, translate.Default(), root, full); err != nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, full); err != nil {
 		t.Fatal(err)
 	}
 	if !exists(root, ".claude/skills/other/ref/a.md") || !exists(root, ".cursor/rules/other.mdc") {
@@ -134,7 +138,7 @@ func TestSyncRemovesStaleFilesAfterManifestShrink(t *testing.T) {
 	os.WriteFile(filepath.Join(root, ".cursor", "rules", "mine.mdc"), []byte("mine"), 0o644)
 
 	shrunk := &Manifest{Formats: []string{"claude", "cursor-rules"}, Skills: []string{"platform/demo"}}
-	rep, err := Sync(ctx, c, translate.Default(), root, shrunk)
+	rep, err := Sync(ctx, gw(c), translate.Default(), root, shrunk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +157,7 @@ func TestSyncRemovesStaleFilesAfterManifestShrink(t *testing.T) {
 		t.Errorf("lock after shrink = %+v", lock)
 	}
 	// Dropping a format removes that format's files too.
-	rep, err = Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
+	rep, err = Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
 	if err != nil || rep.Removed != 1 || exists(root, ".cursor/rules/demo.mdc") || !exists(root, ".cursor/rules/mine.mdc") {
 		t.Errorf("format drop: %+v %v", rep, err)
 	}
@@ -162,14 +166,14 @@ func TestSyncRemovesStaleFilesAfterManifestShrink(t *testing.T) {
 func TestSyncKeepsLocallyModifiedStaleFile(t *testing.T) {
 	_, c, root := setup(t)
 	full := &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo", "platform/other"}}
-	if _, err := Sync(ctx, c, translate.Default(), root, full); err != nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, full); err != nil {
 		t.Fatal(err)
 	}
 	edited := filepath.Join(root, ".claude", "skills", "other", "SKILL.md")
 	if err := os.WriteFile(edited, []byte("my local edits\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
+	rep, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +206,7 @@ func TestSyncKeepsLocallyModifiedStaleFile(t *testing.T) {
 func TestSyncNameCollisionWritesNothing(t *testing.T) {
 	_, c, root := setup(t)
 	m := &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo", "payments/demo"}}
-	_, err := Sync(ctx, c, translate.Default(), root, m)
+	_, err := Sync(ctx, gw(c), translate.Default(), root, m)
 	if err == nil {
 		t.Fatal("expected collision error")
 	}
@@ -216,7 +220,7 @@ func TestSyncNameCollisionWritesNothing(t *testing.T) {
 	// (Install has no lock), so Sync is the safe path; but a valid
 	// pinned ref alongside works.
 	m = &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo@1.0.0", "platform/other"}}
-	if _, err := Sync(ctx, c, translate.Default(), root, m); err != nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, m); err != nil {
 		t.Errorf("valid manifest after collision: %v", err)
 	}
 }
@@ -224,7 +228,7 @@ func TestSyncNameCollisionWritesNothing(t *testing.T) {
 func TestSyncPinnedDigestMismatchDetected(t *testing.T) {
 	_, c, root := setup(t)
 	m := &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo@1.0.0"}}
-	if _, err := Sync(ctx, c, translate.Default(), root, m); err != nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, m); err != nil {
 		t.Fatal(err)
 	}
 	lockPath := filepath.Join(root, LockFile)
@@ -236,7 +240,7 @@ func TestSyncPinnedDigestMismatchDetected(t *testing.T) {
 	// Make the on-disk copy differ so we can prove nothing was rewritten.
 	os.WriteFile(filepath.Join(root, ".claude", "skills", "demo", "SKILL.md"), []byte("canary"), 0o644)
 
-	_, err := Sync(ctx, c, translate.Default(), root, m)
+	_, err := Sync(ctx, gw(c), translate.Default(), root, m)
 	if err == nil {
 		t.Fatal("expected pinned digest mismatch")
 	}
@@ -254,23 +258,23 @@ func TestSyncPinnedDigestMismatchDetected(t *testing.T) {
 	}
 	// A "latest" ref is allowed to move, so a stale lock digest is not an error.
 	os.WriteFile(lockPath, data, 0o644)
-	if _, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}}); err != nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}}); err != nil {
 		t.Errorf("latest ref with stale lock digest: %v", err)
 	}
 	// A pin for a different version than the one now requested does not apply.
 	os.WriteFile(lockPath, data, 0o644)
-	if _, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo@1.0.0"}}); err == nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo@1.0.0"}}); err == nil {
 		t.Error("tampered pin for the requested version should still fail")
 	}
 }
 
 func TestSyncFollowsLatestAndPins(t *testing.T) {
 	g, c, root := setup(t)
-	if _, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}}); err != nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}}); err != nil {
 		t.Fatal(err)
 	}
 	g.Publish(t, gatewaytest.PlatformToken, "platform", "demo", "1.1.0", gatewaytest.Files("demo", map[string]string{"SKILL.md": gatewaytest.SkillMD("demo", "Skill demo v2")}))
-	rep, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
+	rep, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +286,7 @@ func TestSyncFollowsLatestAndPins(t *testing.T) {
 		t.Errorf("stale file from the previous version kept: removed=%d", rep.Removed)
 	}
 	// A pinned older version is honoured.
-	rep, err = Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo@1.0.0"}})
+	rep, err = Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo@1.0.0"}})
 	if err != nil || rep.Skills[0].Version != "1.0.0" || strings.Contains(read(t, root, ".claude/skills/demo/SKILL.md"), "v2") {
 		t.Errorf("pin to 1.0.0: %+v %v", rep, err)
 	}
@@ -297,7 +301,7 @@ func TestSyncErrors(t *testing.T) {
 		"missing ver":    {Formats: []string{"claude"}, Skills: []string{"platform/demo@9.9.9"}},
 	}
 	for label, m := range cases {
-		if _, err := Sync(ctx, c, translate.Default(), root, m); err == nil {
+		if _, err := Sync(ctx, gw(c), translate.Default(), root, m); err == nil {
 			t.Errorf("%s: expected error", label)
 		}
 		if got := listFiles(t, root); len(got) != 0 {
@@ -305,18 +309,18 @@ func TestSyncErrors(t *testing.T) {
 		}
 	}
 	// A reader who may not see payments gets an error, not silent skipping.
-	_, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"payments/demo"}})
+	_, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"payments/demo"}})
 	if err != nil {
 		t.Errorf("admin payments: %v", err)
 	}
 	dave := &client.Client{BaseURL: c.BaseURL, Token: gatewaytest.ReaderToken, HTTP: c.HTTP}
-	if _, err := Sync(ctx, dave, translate.Default(), t.TempDir(), &Manifest{Formats: []string{"claude"}, Skills: []string{"payments/demo"}}); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err := Sync(ctx, gw(dave), translate.Default(), t.TempDir(), &Manifest{Formats: []string{"claude"}, Skills: []string{"payments/demo"}}); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("denied skill: %v", err)
 	}
 	// A corrupt lock file is an error rather than silently ignored.
 	bad := t.TempDir()
 	os.WriteFile(filepath.Join(bad, LockFile), []byte("{not json"), 0o644)
-	if _, err := Sync(ctx, c, translate.Default(), bad, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}}); err == nil {
+	if _, err := Sync(ctx, gw(c), translate.Default(), bad, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}}); err == nil {
 		t.Error("corrupt lock accepted")
 	}
 }
@@ -338,7 +342,7 @@ func TestSyncDetectsTamperingServer(t *testing.T) {
 	ps := httptest.NewServer(proxy)
 	defer ps.Close()
 	c := &client.Client{BaseURL: ps.URL, Token: gatewaytest.AdminToken}
-	_, err := Sync(ctx, c, translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
+	_, err := Sync(ctx, gw(c), translate.Default(), root, &Manifest{Formats: []string{"claude"}, Skills: []string{"platform/demo"}})
 	if err == nil || !strings.Contains(err.Error(), "integrity check failed") {
 		t.Errorf("tampered digest header: %v", err)
 	}
@@ -349,7 +353,8 @@ func TestSyncDetectsTamperingServer(t *testing.T) {
 
 func TestInstall(t *testing.T) {
 	_, c, root := setup(t)
-	res, err := Install(ctx, c, translate.Default(), root, "platform", "other", "latest", []string{"codex", "cursor-rules"})
+	ref := source.Ref{Namespace: "platform", Name: "other", Version: "latest"}
+	res, err := Install(ctx, gw(c), translate.Default(), root, ref, []string{"codex", "cursor-rules"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,10 +365,10 @@ func TestInstall(t *testing.T) {
 	if got := listFiles(t, root); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("files = %v", got)
 	}
-	if _, err := Install(ctx, c, translate.Default(), root, "platform", "other", "2.0.0", []string{"claude"}); err == nil {
+	if _, err := Install(ctx, gw(c), translate.Default(), root, source.Ref{Namespace: "platform", Name: "other", Version: "2.0.0"}, []string{"claude"}); err == nil {
 		t.Error("missing version installed")
 	}
-	if _, err := Install(ctx, c, translate.Default(), root, "platform", "other", "latest", []string{"nope"}); err == nil {
+	if _, err := Install(ctx, gw(c), translate.Default(), root, ref, []string{"nope"}); err == nil {
 		t.Error("unknown format installed")
 	}
 }
@@ -434,7 +439,7 @@ func TestParseRef(t *testing.T) {
 		{"platform/demo@1.2.3", "platform", "demo", "1.2.3", true},
 		{"platform/demo@latest", "platform", "demo", "latest", true},
 		{"platform/demo@1.0.0-rc.1", "platform", "demo", "1.0.0-rc.1", true},
-		{"demo", "", "", "", false},
+		{"demo", "", "demo", "latest", true},
 		{"/demo", "", "", "", false},
 		{"platform/", "", "", "", false},
 		{"a/b/c", "", "", "", false},
@@ -443,9 +448,9 @@ func TestParseRef(t *testing.T) {
 		{"platform/demo@", "", "", "", false},
 	}
 	for _, c := range cases {
-		ns, name, ver, err := parseRef(c.in)
-		if (err == nil) != c.ok || ns != c.ns || name != c.name || ver != c.ver {
-			t.Errorf("parseRef(%q) = %q %q %q %v, want %q %q %q ok=%v", c.in, ns, name, ver, err, c.ns, c.name, c.ver, c.ok)
+		r, err := source.ParseRef(c.in)
+		if (err == nil) != c.ok || r.Namespace != c.ns || r.Name != c.name || (err == nil && r.Version != c.ver) {
+			t.Errorf("ParseRef(%q) = %+v %v, want %q %q %q ok=%v", c.in, r, err, c.ns, c.name, c.ver, c.ok)
 		}
 	}
 }

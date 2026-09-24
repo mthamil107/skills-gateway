@@ -1,6 +1,8 @@
 # Skills Gateway
 
-**A governed, identity-aware server for [Agent Skills](https://agentskills.io).** Publish a skill once. Every agent in the organisation (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, Windsurf) receives the skills its user is allowed to use, in the layout that agent expects, with a verifiable digest and an audit trail.
+**Governed, identity-aware distribution for [Agent Skills](https://agentskills.io).** Publish a skill once. Every agent (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, Windsurf) gets the skills its user is allowed to use, in the layout that agent expects, verified by digest.
+
+Use it two ways: **`sgw sync` alone**, installing skills from a folder or a Git repo with no server to run, or **with the gateway**, which adds identity, per-fetch policy, immutable versions and an audit log.
 
 <p align="center">
   <img alt="Skills Gateway explained in eight beats: one skill folder copied by hand to every agent, 36.8% of public skills carry a flaw, a governed hop in the middle, every fetch decided by identity and policy, denied looks like missing, each version frozen and fingerprinted, one catalog served over REST, sync and MCP" src="docs/demos/skills-gateway-explainer.gif" width="560">
@@ -35,7 +37,7 @@ Skills Gateway adds that layer, and it is small enough to run as one binary:
 - **Policy on every fetch.** Rules are default-deny, and a deny always wins. They match on user, team, role and agent type, with namespace and name globs and semver ranges. Skills a caller may not fetch look exactly like missing skills.
 - **Immutable, digest-verified versions.** A published version can never be overwritten. Its digest is computed from the files, not the archive, so it is stable, and clients verify it on download.
 - **Append-only audit.** Every publish, deprecation and denied request is recorded, and each change is recorded in the same transaction as the change itself. Content reads (bundle, file, translate and MCP reads) are recorded too. Export the log as JSON Lines for your SIEM.
-- **Native delivery.** `sgw sync` writes verified skills into each agent's own skills directory and keeps a lock file of digests. The MCP endpoint implements the [MCP Skills Extension (SEP-2640)](https://modelcontextprotocol.io/seps/2640-skills-extension), and it also offers plain tools for MCP clients that do not support the extension yet.
+- **Native delivery, with or without the server.** `sgw sync` writes verified skills into each agent's own skills directory — in a project or in the home directory that serves every repo — and keeps a lock file of digests. Its source can be a folder, a Git repository or the gateway. The MCP endpoint implements the [MCP Skills Extension (SEP-2640)](https://modelcontextprotocol.io/seps/2640-skills-extension), and it also offers plain tools for MCP clients that do not support the extension yet.
 
 ## How it works
 
@@ -101,11 +103,11 @@ A skill is a folder, so the fingerprint covers every file in it, not just `SKILL
 
 ### Sync: what lands in your project
 
-`sgw sync` reads a short file listing the skills and the agents you want. Nothing is written until every skill has been downloaded and checked, so a failure never leaves half-written folders.
+`sgw sync` reads a short file listing the source, the skills and the agents you want. Nothing is written until every skill has been fetched and checked, so a failure never leaves half-written folders. The source is a gateway, a folder or a Git repository.
 
 ```text
-  sgw-sync.yaml                 gateway                      your project
-  ────────────────              ───────                      ────────────
+  sgw-sync.yaml                 source                       your project
+  ────────────────              ──────                       ────────────
   formats:                         │
     [claude, cursor]               │  1  resolve "latest"  →  1.4.0
   skills:                          │  2  download that exact version
@@ -124,6 +126,55 @@ A skill is a folder, so the fingerprint covers every file in it, not just `SKILL
                                            (commit it; the next sync checks
                                             the same version still matches)
 ```
+
+## Two ways to use it
+
+The same command installs skills either way, so a team can start without running anything and add governance later. Nothing about the output changes: same folders, same digests, same lock file.
+
+```text
+  WITHOUT A SERVER                          WITH THE GATEWAY
+
+  a folder or a git repo                    a gateway server
+  of SKILL.md directories                   identity · policy · audit
+           │                                         │
+           │  sgw sync                               │  sgw sync
+           ▼                                         ▼
+    verified copies + sgw-lock.json           verified copies + sgw-lock.json
+    in each agent's folders                   in each agent's folders
+
+  you get: one source, digests,             you also get: who may fetch what,
+  pinned versions, no copying               immutable versions, an audit log
+```
+
+Point the manifest at whichever source you have:
+
+```yaml
+# sgw-sync.yaml — name exactly one source
+path: ../team-skills                    # a folder of skill directories
+# git: https://github.com/acme/skills   # with optional ref: and dir:
+# gateway: https://skills.example.com   # or omit and set $SGW_URL
+
+formats: [claude, cursor]
+skills: ["*"]        # or a list: [platform/code-review, payments/refunds@1.2.0]
+```
+
+Install into the project, or into your home directory where **every agent reads them for every repo**:
+
+```bash
+sgw sync              # .claude/skills/, .cursor/skills/ … in this project
+sgw sync -out ~       # ~/.claude/skills/, ~/.cursor/skills/ … for every repo
+```
+
+`-out ~` writes the lock file to `~/sgw-lock.json`. Skill names must be unique across the skills you sync into one root, since every agent addresses a skill by its folder name.
+
+One skill, without a manifest:
+
+```bash
+sgw fetch code-review -path ../team-skills -format cursor -out ~
+sgw fetch code-review -git https://github.com/acme/skills -dir skills
+```
+
+What differs between the sources is what can be *promised*. A gateway publishes immutable versions, so a recorded digest must never change and sync treats a change as tampering. A folder or a moving branch legitimately changes, so sync records the new digest instead. A tag or a commit is fixed, so it is pinned like a gateway version.
 
 ## Quick start
 
