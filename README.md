@@ -2,21 +2,21 @@
 
 **A governed, identity-aware server for [Agent Skills](https://agentskills.io).** Publish a skill once. Every agent in the organisation (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, Windsurf) receives the skills its user is allowed to use, in the layout that agent expects, with a verifiable digest and an audit trail.
 
-```
-            publish (OIDC identity, policy check, immutable version)
-  author ─────────────────────────────────────────────┐
-                                                       ▼
-                                          ┌──────────────────────┐
-                                          │    Skills Gateway    │
-                                          │ OIDC · policy · audit│
-                                          │ SQLite · digests     │
-                                          └──┬────────┬───────┬──┘
-                          REST /v1           │        │       │  MCP /mcp (SEP-2640 + tools)
-                 ┌───────────────────────────┘        │       └─────────────────┐
-                 ▼                                    ▼                         ▼
-          sgw sync / CI                         any HTTP client            MCP clients
-   .claude/skills  .agents/skills                                    skills/list, skills/get,
-   .cursor/skills  .github/skills  ...                               list_skills, get_skill
+```text
+  WITHOUT A GATEWAY                      WITH SKILLS GATEWAY
+
+  one skills repo                        one skills repo
+        │                                      │  publish once
+        │  copy, symlink, paste                ▼
+        ├──► .claude/skills   dev A      ┌─────────────┐
+        ├──► .cursor/skills   dev B      │   gateway   │  who is asking?
+        ├──► .agents/skills   CI         │  identity   │  what may they load?
+        └──► ...              laptop 4   │  + policy   │  which version exactly?
+                                         └──────┬──────┘
+  · nobody knows who has what                   │  verified copy, recorded
+  · no way to keep one team out                 ├──► .claude/skills
+  · copies drift, silently                      ├──► .cursor/skills
+  · no record of who loaded what                └──► .agents/skills
 ```
 
 > **Status: v0.1, early.** The API and the [protocol spec](docs/spec/skills-gateway-protocol.md) can still change. Feedback and issues are welcome.
@@ -29,9 +29,97 @@ Skills Gateway adds that layer, and it is small enough to run as one binary:
 
 - **Identity on every request.** Tokens from any OpenID Connect provider (Keycloak, Entra ID, Okta, Auth0, Cognito). Static tokens are available for development.
 - **Policy on every fetch.** Rules are default-deny, and a deny always wins. They match on user, team, role and agent type, with namespace and name globs and semver ranges. Skills a caller may not fetch look exactly like missing skills.
-- **Immutable, content-addressed versions.** A published version can never be overwritten. Its digest is computed from the files, not the archive, so it is stable, and clients verify it on download.
+- **Immutable, digest-verified versions.** A published version can never be overwritten. Its digest is computed from the files, not the archive, so it is stable, and clients verify it on download.
 - **Append-only audit.** Every publish, deprecation and denied request is recorded, and each change is recorded in the same transaction as the change itself. Content reads (bundle, file, translate and MCP reads) are recorded too. Export the log as JSON Lines for your SIEM.
 - **Native delivery.** `sgw sync` writes verified skills into each agent's own skills directory and keeps a lock file of digests. The MCP endpoint implements the [MCP Skills Extension (SEP-2640)](https://modelcontextprotocol.io/seps/2640-skills-extension), and it also offers plain tools for MCP clients that do not support the extension yet.
+
+## How it works
+
+### One request, from token to answer
+
+Every request walks the same four steps. A caller who may not have a skill is told it does not exist, so the policy itself cannot be used to discover what is hidden.
+
+```text
+  request  ──  Authorization: Bearer <token>
+     │
+     ▼
+  ┌──────────────────────────┐   OIDC (or a dev token) gives:
+  │ 1  IDENTITY              │     subject · teams · roles · agent type
+  │    who is calling?       │   the agent type comes from the token,
+  └────────────┬─────────────┘   never from a header a client could set
+               ▼
+  ┌──────────────────────────┐   rules match on namespace, name,
+  │ 2  POLICY                │   version range and agent type
+  │    may they have it?     │   a deny always wins
+  └────────────┬─────────────┘   nothing is allowed unless a rule says so
+               │
+      allow    │    deny ────────►  404 not found
+               │                    (identical to a skill that isn't there)
+               ▼
+  ┌──────────────────────────┐   published versions never change
+  │ 3  REGISTRY              │   "latest" = newest version THIS caller
+  │    which version?        │            may fetch, stable over pre-release
+  └────────────┬─────────────┘
+               ▼
+  ┌──────────────────────────┐   who, what, when, from where —
+  │ 4  AUDIT                 │   appended, never edited or deleted
+  └────────────┬─────────────┘
+               ▼
+    the skill, three ways:
+
+    REST /v1          sgw sync            MCP /mcp
+    bundle, files,    writes agent         skills/list, skills/get,
+    metadata          folders directly     list_skills, get_skill
+```
+
+### Publishing: where the digest comes from
+
+A skill is a folder, so the fingerprint covers every file in it, not just `SKILL.md`. It is built from the file contents, so re-zipping the same folder on another machine produces the same digest.
+
+```text
+  the skill folder                    each file hashed
+  ┌───────────────────────┐
+  │ SKILL.md              │  ──►  sha256  599662b6…
+  │ references/           │
+  │   checklist.md        │  ──►  sha256  d7dff65b…
+  └───────────────────────┘
+                                          │
+              sorted list of "path + hash" for every file
+                                          │
+                                          ▼
+                              sha256:344413734f917ab6…   ← the version's digest
+                                          │
+                 ┌────────────────────────┴────────────────────────┐
+                 ▼                                                 ▼
+        stored with the version                    sent on every download,
+        and frozen forever                         and re-checked by the client
+```
+
+### Sync: what lands in your project
+
+`sgw sync` reads a short file listing the skills and the agents you want. Nothing is written until every skill has been downloaded and checked, so a failure never leaves half-written folders.
+
+```text
+  sgw-sync.yaml                 gateway                      your project
+  ────────────────              ───────                      ────────────
+  formats:                         │
+    [claude, cursor]               │  1  resolve "latest"  →  1.4.0
+  skills:                          │  2  download that exact version
+    - platform/code-review ────────┤  3  digest as promised?
+    - payments/refunds@1.2.0       │         │
+                                   │     no ─┴─►  stop; nothing is written
+                                   │     yes
+                                   ▼
+                         translate on your machine
+                        (from the bytes just verified)
+                                   │
+                                   ├──►  .claude/skills/code-review/…
+                                   ├──►  .cursor/skills/code-review/…
+                                   └──►  sgw-lock.json
+                                           version + digest + file hashes
+                                           (commit it; the next sync checks
+                                            the same version still matches)
+```
 
 ## Quick start
 
