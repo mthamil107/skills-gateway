@@ -1,16 +1,18 @@
 """Render the Skills Gateway explainer GIF using Pillow.
 
 A 1080x1080 square explainer that walks a scroll-past viewer through eight
-storyboard beats in ~11 seconds, then loops:
+storyboard beats in ~22 seconds, then loops:
 
-  1. Title / pain statement                        (0.0-1.2s)
-  2. One skills folder, copied everywhere          (1.2-2.5s)
-  3. Red pain banner sweeps in                     (2.5-3.7s)
-  4. The gateway inserts itself in the middle      (3.7-4.9s)
-  5. One request: identity -> policy -> allow/deny (4.9-6.6s)
-  6. Every file hashed into one version digest     (6.6-7.9s)
-  7. One catalog, three ways out                   (7.9-9.2s)
-  8. Hold + CTA caption                            (9.2-10.9s)
+  1. Title / pain statement
+  2. One skills folder, copied everywhere
+  3. Red pain banner sweeps in
+  4. The gateway inserts itself in the middle
+  5. One request: identity -> policy -> allow/deny
+  6. Every file hashed into one version digest
+  7. One catalog, three ways out
+  8. Hold + CTA caption
+
+Pacing lives in SPEED and BEAT_FRAMES_BASE below, not in the beats.
 
 Reproducible: no randomness, no HTTP, no file IO besides the output GIF.
 
@@ -60,16 +62,24 @@ HEIGHT = 1080
 FPS = 12
 FRAME_MS = int(round(1000 / FPS))
 
-BEAT_FRAMES = [
+# SPEED stretches every hold and every stagger. 1.0 is brisk; raise it until
+# a first-time reader can finish the densest beat without pausing. Held
+# frames are pixel-identical, so they merge on export: a slower GIF costs
+# almost nothing in bytes.
+SPEED = 1.8
+
+# Base frames per beat at SPEED 1.0, where 12 frames = 1.0s.
+BEAT_FRAMES_BASE = [
     14,   # B1 title
-    16,   # B2 copied everywhere
-    14,   # B3 pain banner
+    18,   # B2 copied everywhere
+    16,   # B3 pain banner
     14,   # B4 gateway inserts
-    20,   # B5 one request
-    16,   # B6 digest
-    16,   # B7 three ways out
+    24,   # B5 one request
+    20,   # B6 digest
+    20,   # B7 three ways out
     20,   # B8 hold + CTA
 ]
+BEAT_FRAMES = [int(round(b * SPEED)) for b in BEAT_FRAMES_BASE]
 TOTAL_FRAMES = sum(BEAT_FRAMES)
 
 EASE_FRAMES = 3
@@ -128,10 +138,14 @@ def ease_out_cubic(t: float) -> float:
 
 
 def pop(frame_in_beat: int, delay: int = 0, ease: int = EASE_FRAMES) -> float:
-    """0..1 progress for a pop-in that starts `delay` frames into the beat."""
+    """0..1 progress for a pop-in that starts `delay` frames into the beat.
+
+    Delay and ease both scale with SPEED, so the choreography written at
+    SPEED 1.0 keeps its shape when the whole GIF is slowed down.
+    """
     if ease <= 0:
         return 1.0
-    return ease_out_cubic((frame_in_beat - delay) / ease)
+    return ease_out_cubic((frame_in_beat - delay * SPEED) / (ease * SPEED))
 
 
 def blend(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
@@ -313,7 +327,7 @@ def beat3(d, fonts, f: int) -> None:
     page_frame(d, fonts, "Snyk ToxicSkills audit, February 2026")
     text_center(d, "And a skill is not just a file", WIDTH // 2, 132, fonts["h2"], FG)
 
-    t = ease_out_cubic(min(1.0, f / 5))
+    t = ease_out_cubic(min(1.0, f / (5 * SPEED)))
     bw, bh = 860, 260
     bx = int(WIDTH / 2 - bw / 2)
     by = int(420 - bh / 2)
@@ -356,7 +370,7 @@ def beat4(d, fonts, f: int) -> None:
     skill_card(d, fonts, (40, 390, 316, 550))
     text_at(d, "your skills repo", 40, 358, fonts["small"], DIM)
 
-    t = ease_out_cubic(min(1.0, f / 6))
+    t = ease_out_cubic(min(1.0, f / (6 * SPEED)))
     gw = (int(346 - (1 - t) * 40), 330, int(620 - (1 - t) * 40), 610)
     gateway_box(d, fonts, gw, t=t)
 

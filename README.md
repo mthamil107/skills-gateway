@@ -3,7 +3,7 @@
 **A governed, identity-aware server for [Agent Skills](https://agentskills.io).** Publish a skill once. Every agent in the organisation (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, Windsurf) receives the skills its user is allowed to use, in the layout that agent expects, with a verifiable digest and an audit trail.
 
 <p align="center">
-  <img alt="Skills Gateway in 11 seconds: one skill folder copied by hand to every agent, 36.8% of public skills carry a flaw, a governed hop in the middle, every fetch decided by identity and policy, denied looks like missing, each version frozen and fingerprinted, one catalog served over REST, sync and MCP" src="docs/demos/skills-gateway-explainer.gif" width="560">
+  <img alt="Skills Gateway explained in eight beats: one skill folder copied by hand to every agent, 36.8% of public skills carry a flaw, a governed hop in the middle, every fetch decided by identity and policy, denied looks like missing, each version frozen and fingerprinted, one catalog served over REST, sync and MCP" src="docs/demos/skills-gateway-explainer.gif" width="560">
 </p>
 
 ```text
