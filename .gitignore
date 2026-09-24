@@ -31,3 +31,7 @@ Thumbs.db
 .cursor/
 .agents/
 .braid/
+
+# Python bytecode (the demo renderer)
+__pycache__/
+*.pyc
