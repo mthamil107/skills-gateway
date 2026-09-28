@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -31,8 +32,28 @@ import (
 	"github.com/mthamil107/skills-gateway/internal/translate"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
+// version is stamped at build time with -ldflags "-X main.version=...".
+// A release archive carries the tag that way. `go install` cannot pass
+// linker flags, so buildVersion() falls back to the module version the Go
+// toolchain recorded, and only then to this development default.
 var version = "0.1.0-dev"
+
+// buildVersion returns the version to report. The ldflags value wins when
+// it was set; otherwise the module version from the build info is used,
+// which is how `go install module/cmd@v0.1.0` reports 0.1.0 rather than a
+// development string.
+func buildVersion() string {
+	if version != "0.1.0-dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return version
+	}
+	// A pseudo-version (an untagged commit) is more honest than a bare
+	// version number, so it is reported as-is, minus the leading "v".
+	return strings.TrimPrefix(info.Main.Version, "v")
+}
 
 const usage = `sgw — Skills Gateway %s
 
@@ -63,7 +84,7 @@ A sync manifest names exactly one source:
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, usage, version)
+		fmt.Fprintf(os.Stderr, usage, buildVersion())
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
@@ -90,11 +111,11 @@ func main() {
 			fmt.Printf("%-13s %s\n", f, translate.Default()[f].Description())
 		}
 	case "version", "-v", "--version":
-		fmt.Println(version)
+		fmt.Println(buildVersion())
 	case "help", "-h", "--help":
-		fmt.Printf(usage, version)
+		fmt.Printf(usage, buildVersion())
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n"+usage, cmd, version)
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n"+usage, cmd, buildVersion())
 		os.Exit(2)
 	}
 	if err != nil {
@@ -134,7 +155,7 @@ func serve(args []string) error {
 	reg := registry.New(st, pol)
 	srv := &server.Server{
 		Reg: reg, Auth: authn, Translators: translate.Default(), Log: log,
-		MaxBody: cfg.MaxUploadBytes, MCP: mcp.NewHandler(reg, version),
+		MaxBody: cfg.MaxUploadBytes, MCP: mcp.NewHandler(reg, buildVersion()),
 	}
 	hs := &http.Server{
 		Addr: cfg.Listen, Handler: srv.Handler(),
@@ -147,7 +168,7 @@ func serve(args []string) error {
 		defer cancel()
 		hs.Shutdown(shutdown)
 	}()
-	log.Info("skills gateway listening", "addr", cfg.Listen, "auth", cfg.Auth.Mode, "version", version)
+	log.Info("skills gateway listening", "addr", cfg.Listen, "auth", cfg.Auth.Mode, "version", buildVersion())
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

@@ -1,0 +1,132 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, for example v0.1.0
+        required: true
+        type: string
+permissions:
+  contents: write
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - name: check tag
+        run: |
+          case "$TAG" in
+            v[0-9]*) echo "releasing $TAG" ;;
+            *) echo "tag must look like v0.1.0, got '$TAG'" >&2; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build and archive
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          name="sgw_${version}_${GOOS}_${GOARCH}"
+          bin=sgw
+          if [ "$GOOS" = windows ]; then bin=sgw.exe; fi
+          mkdir -p "dist/$name"
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "dist/$name/$bin" ./cmd/sgw
+          cp LICENSE README.md "dist/$name/"
+          if [ "$GOOS" = windows ]; then
+            (cd "dist/$name" && zip -q "../$name.zip" "$bin" LICENSE README.md)
+          else
+            tar -C "dist/$name" --owner=0 --group=0 --numeric-owner -czf "dist/$name.tar.gz" "$bin" LICENSE README.md
+          fi
+          rm -r "dist/$name"
+          ls -l dist
+      - name: smoke test
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          tar -xzf "dist/sgw_${version}_linux_amd64.tar.gz" -C dist sgw
+          got="$(dist/sgw version)"
+          echo "sgw version -> $got"
+          test "$got" = "$version"
+          rm dist/sgw
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgw_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/sgw_*
+          if-no-files-found: error
+          retention-days: 1
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sgw_*
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          test "$(ls sgw_* | wc -l)" -eq 6
+          # shellcheck disable=SC2046
+          sha256sum $(ls sgw_* | LC_ALL=C sort) > checksums.txt
+          sha256sum -c checksums.txt
+          cat checksums.txt
+      - name: release notes
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # The CHANGELOG section for this version: from "## [<version>]" up to the next "## " heading.
+          awk -v v="$version" '
+            /^## \[/ { on = index($0, "## [" v "]") == 1 }
+            on && !/^## \[/ { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' | sed -e ':a' -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          if [ ! -s notes.md ]; then
+            printf 'Release %s.\n\nNo CHANGELOG section for %s; see [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md).\n' \
+              "$TAG" "$version" "$GITHUB_REPOSITORY" "$TAG" > notes.md
+          fi
+          {
+            printf '\n## Install\n\nDownload the archive for your platform below, unpack it, and put `sgw` on your PATH. Verify the download against `checksums.txt`:\n\n'
+            printf '```\nsha256sum -c --ignore-missing checksums.txt\n```\n'
+          } >> notes.md
+          cat notes.md
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          args=(--title "$TAG" --notes-file notes.md --verify-tag)
+          case "$version" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG exists; replacing its assets"
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/sgw_* dist/checksums.txt
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${args[@]}" dist/sgw_* dist/checksums.txt
+          fi

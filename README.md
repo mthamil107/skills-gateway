@@ -180,12 +180,32 @@ sgw fetch code-review -git https://github.com/acme/skills -dir skills
 
 What differs between the sources is what can be *promised*. A gateway publishes immutable versions, so a recorded digest must never change and sync treats a change as tampering. A folder or a moving branch legitimately changes, so sync records the new digest instead. A tag or a commit is fixed, so it is pinned like a gateway version.
 
-## Quick start
+## Install
 
-Requires Go 1.26+.
+Download the archive for your machine from the
+[latest release](https://github.com/mthamil107/skills-gateway/releases/latest),
+unpack it, and put `sgw` on your PATH. Each release ships Windows, macOS and
+Linux builds for amd64 and arm64, plus a `checksums.txt` to verify against:
+
+```bash
+# macOS / Linux
+tar xzf sgw_0.1.0_darwin_arm64.tar.gz
+shasum -a 256 -c checksums.txt --ignore-missing
+./sgw version
+```
+
+The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper
+will warn on first run. Verify the checksum instead of trusting the warning.
+
+With a Go toolchain:
 
 ```bash
 go install github.com/mthamil107/skills-gateway/cmd/sgw@latest
+```
+
+## Quick start
+
+```bash
 
 # 1. Run a local gateway with development tokens (use OIDC in production)
 cp examples/sgw.yaml sgw.yaml

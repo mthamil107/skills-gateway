@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-28
+
+First release. Everything below is new.
+
 ### Added
 
 - `sgw` single binary: `serve`, `publish`, `list`, `get`, `fetch`, `sync`, `deprecate`, `audit`, `formats`.
@@ -27,4 +31,22 @@ All notable changes to this project are documented here. The format follows
 - SKILL.md frontmatter with an unquoted colon in a plain value (for example
   `description: covers everything: screens, menus`) is repaired the way the
   agents' own lenient parsers read it, instead of being rejected.
+- Prebuilt binaries for Windows, macOS and Linux (amd64 and arm64), with a
+  `checksums.txt` to pin against, so `sgw` can be used without a Go toolchain.
+- `sgw version` reports the released version. A binary built from a release
+  archive carries the tag; `go install` reports the module version the Go
+  toolchain recorded, since it cannot pass linker flags.
 - Protocol specification draft (`docs/spec/skills-gateway-protocol.md`).
+
+### Known limitations
+
+- The API and the protocol spec can still change before 1.0.
+- Static tokens and `auth.mode: none` are for development; use OIDC otherwise.
+- MCP serves the latest version a caller may fetch; pin a version over REST
+  or with `sgw sync`.
+- The git cache is not locked, so two syncs of the same repository at
+  different refs can race.
+- A moving branch rewrites every lock entry on each upstream commit, even
+  for skills whose files did not change.
+
+[0.1.0]: https://github.com/mthamil107/skills-gateway/releases/tag/v0.1.0
