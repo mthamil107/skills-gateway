@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/mthamil107/skills-gateway/internal/syncer"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,13 +32,13 @@ func TestExpandHome(t *testing.T) {
 		filepath.Join(home, "y"): filepath.Join(home, "y"), // already absolute
 	}
 	for in, want := range cases {
-		if got := expandHome(in); got != want {
-			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		if got := syncer.ExpandHome(in); got != want {
+			t.Errorf("syncer.ExpandHome(%q) = %q, want %q", in, got, want)
 		}
 	}
 	// "~/" alone is the home directory, not home plus an empty segment.
-	if got := expandHome("~/"); filepath.Clean(got) != filepath.Clean(home) {
-		t.Errorf("expandHome(\"~/\") = %q, want %q", got, home)
+	if got := syncer.ExpandHome("~/"); filepath.Clean(got) != filepath.Clean(home) {
+		t.Errorf("syncer.ExpandHome(\"~/\") = %q, want %q", got, home)
 	}
 }
 

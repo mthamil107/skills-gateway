@@ -69,7 +69,7 @@ func (m *Manifest) Source(ctx context.Context, base string, newGateway func(url 
 	}
 	switch {
 	case m.Path != "":
-		dir := expandHome(m.Path)
+		dir := ExpandHome(m.Path)
 		if !filepath.IsAbs(dir) {
 			dir = filepath.Join(base, filepath.FromSlash(dir))
 		}
@@ -105,8 +105,9 @@ func LoadManifest(path string) (*Manifest, error) {
 	return &m, nil
 }
 
-// expandHome turns a leading "~" into the user's home directory.
-func expandHome(p string) string {
+// ExpandHome turns a leading "~" into the user's home directory, so
+// `-out ~` behaves the same way in every shell.
+func ExpandHome(p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
 		return p
 	}
@@ -159,7 +160,8 @@ func Install(ctx context.Context, src source.Source, reg translate.Registry, roo
 	if err != nil {
 		return p.Installed, err
 	}
-	return p.Installed, writeAll(root, p.files)
+	_, err = writeAll(root, p.files, nil, true)
+	return p.Installed, err
 }
 
 // prepare resolves, verifies and translates one skill without writing.
@@ -210,19 +212,59 @@ func prepare(ctx context.Context, src source.Source, reg translate.Registry, ref
 	return res, nil
 }
 
-func writeAll(root string, files []translate.OutFile) error {
+// writeAll writes every file, skipping any the developer has edited since
+// sync wrote it. It returns the paths it kept.
+//
+// This matters most when sync runs on its own, from a session hook: an
+// author keeping work in progress in the install directory must never lose
+// it to an automatic update.
+func writeAll(root string, files []translate.OutFile, wroteBefore map[string]string, force bool) ([]string, error) {
 	// Validate every path before touching the disk.
 	for _, f := range files {
 		if _, err := safeJoin(root, f.Path); err != nil {
-			return err
+			return nil, err
 		}
 	}
+	var kept []string
 	for _, f := range files {
+		if !force && locallyEdited(root, f, wroteBefore) {
+			kept = append(kept, f.Path)
+			continue
+		}
 		if err := writeFile(root, f.Path, f.Content); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return kept, nil
+}
+
+// locallyEdited reports whether the file on disk differs both from what
+// sync last wrote there and from what it is about to write. A file sync
+// has never written is not treated as an edit: the first install adopts it.
+func locallyEdited(root string, f translate.OutFile, wroteBefore map[string]string) bool {
+	previous, known := wroteBefore[f.Path]
+	if !known {
+		return false
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return false
+	}
+	defer r.Close()
+	data, err := r.ReadFile(filepath.FromSlash(f.Path))
+	if err != nil {
+		return false // gone: rewrite it
+	}
+	onDisk := hex.EncodeToString(sha256sum(data))
+	if onDisk == previous {
+		return false // untouched since we wrote it
+	}
+	return onDisk != hex.EncodeToString(sha256sum(f.Content))
+}
+
+func sha256sum(b []byte) []byte {
+	sum := sha256.Sum256(b)
+	return sum[:]
 }
 
 // safeJoin resolves a translator output path under root, refusing anything
@@ -300,12 +342,25 @@ type Report struct {
 	Skills   []LockedSkill
 	Written  int
 	Removed  int
+	Kept     int // files left alone because they carry local edits
 	Warnings []string
+}
+
+// Options tunes a sync run.
+type Options struct {
+	// Force overwrites files that were edited after sync wrote them.
+	// Without it, such a file is kept and reported.
+	Force bool
 }
 
 // Sync installs every skill in the manifest, pins digests in the lock file
 // and removes files a previous sync wrote that are no longer produced.
 func Sync(ctx context.Context, src source.Source, reg translate.Registry, root string, m *Manifest) (Report, error) {
+	return SyncWith(ctx, src, reg, root, m, Options{})
+}
+
+// SyncWith is Sync with options.
+func SyncWith(ctx context.Context, src source.Source, reg translate.Registry, root string, m *Manifest, opt Options) (Report, error) {
 	var rep Report
 	old, err := readLock(root)
 	if err != nil {
@@ -316,8 +371,12 @@ func Sync(ctx context.Context, src source.Source, reg translate.Registry, root s
 		return rep, err
 	}
 	pins := map[string]LockedSkill{}
+	written := map[string]string{} // output path -> the hash sync wrote there
 	for _, s := range old.Skills {
 		pins[s.Ref] = s
+		for _, f := range s.Files {
+			written[f.Path] = f.SHA256
+		}
 	}
 	owner := map[string]string{} // output path -> skill ref, to catch collisions
 	var lock Lock
@@ -348,8 +407,14 @@ func Sync(ctx context.Context, src source.Source, reg translate.Registry, root s
 	}
 	// Nothing is written until every skill has been fetched, verified and
 	// checked for collisions.
-	if err := writeAll(root, all); err != nil {
+	kept, err := writeAll(root, all, written, opt.Force)
+	if err != nil {
 		return rep, err
+	}
+	for _, k := range kept {
+		rep.Kept++
+		rep.Written--
+		rep.Warnings = append(rep.Warnings, "kept your edited "+k+" (sync -force overwrites it)")
 	}
 	// Remove files we wrote last time that this sync no longer produces,
 	// but only if they are unchanged since we wrote them.

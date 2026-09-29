@@ -380,7 +380,7 @@ func TestWriteFileRefusesSymlinkAndEscape(t *testing.T) {
 			t.Errorf("safeJoin(%q) accepted", rel)
 		}
 	}
-	if err := writeAll(root, []translate.OutFile{{Path: "ok.txt", Content: []byte("x")}, {Path: "../bad", Content: []byte("y")}}); err == nil {
+	if _, err := writeAll(root, []translate.OutFile{{Path: "ok.txt", Content: []byte("x")}, {Path: "../bad", Content: []byte("y")}}, nil, true); err == nil {
 		t.Error("writeAll with an escaping path succeeded")
 	}
 	if exists(root, "ok.txt") {

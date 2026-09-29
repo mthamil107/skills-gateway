@@ -176,7 +176,7 @@ For each skill sync MUST:
 
 After writing, sync removes files that the previous lock recorded and this run no longer produces, but only if they are unchanged since sync wrote them. Locally modified files are kept and reported. The lock records the source, version, digest and per-file hashes.
 
-The output root is the project by default, and may be the user's home directory, where every agent reads skills for every project.
+A file that differs both from what the lock records and from what sync is about to write has been edited by the developer. Sync MUST keep it and report it, rather than overwrite it, unless the caller explicitly forces the write. This matters most when sync runs unattended from a session hook, where an author's unpublished work would otherwise disappear without a word.
 
 ### 10.1 Formats
 
@@ -194,6 +194,17 @@ Agent Skills directories are read natively by current agents, so most formats pl
 | `cursor-rules` | `.cursor/rules/<name>.mdc`. A lossy legacy rule: the frontmatter `description`, plus `globs` and `alwaysApply` from the optional `agents.cursor` frontmatter hint. Supporting files are dropped, with a warning. |
 
 The optional `agents` frontmatter key is a gateway extension for translator hints. Agents that read SKILL.md natively ignore it.
+
+### 10.2 Unattended sync
+
+A client MAY install a session-start hook in an agent's own settings so skills are refreshed when work begins. Such a hook MUST:
+
+1. do no work at all more often than a configured interval;
+2. determine cheaply whether the source has moved before fetching anything — for a Git source, resolving the ref without cloning; for a gateway, one list request; for a directory, a scan that reads no file contents;
+3. produce no output when nothing changed, and at most one line when it did;
+4. never delay, block or fail the session: an unreachable source, a failed verification or a corrupt cache MUST end the run silently.
+
+The output root is the project by default, and may be the user's home directory, where every agent reads skills for every project.
 
 ## 11. Security considerations
 

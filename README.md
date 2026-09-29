@@ -169,7 +169,26 @@ sgw sync              # .claude/skills/, .cursor/skills/ … in this project
 sgw sync -out ~       # ~/.claude/skills/, ~/.cursor/skills/ … for every repo
 ```
 
-`-out ~` writes the lock file to `~/sgw-lock.json`. Skill names must be unique across the skills you sync into one root, since every agent addresses a skill by its folder name.
+`-out ~` writes the lock file to `~/sgw-lock.json`.
+
+### Keeping them current
+
+Installing skills once leaves them to go stale, and being out of date looks exactly like being up to date. One command ties a check to the moment skills are about to be used — the start of an agent session:
+
+```bash
+sgw hook install            # writes a Claude Code SessionStart hook
+sgw hook status             # what is installed, and when it last ran
+sgw hook remove             # takes it out again
+```
+
+The hook is built to be ignorable:
+
+- **Cheap.** At most one check per interval (`-every 4h`), and that check is a single `git ls-remote`, one list request, or a directory scan. When the source has not moved, nothing is downloaded and nothing is written.
+- **Never in the way.** A failed check, an unreachable source or a missing network is silent, and the session starts normally.
+- **Quiet.** Silent when nothing changed; one line when it updated something.
+- **Safe for authors.** Sync never overwrites a file you edited after it was written; those are kept and reported. `sgw sync -force` overwrites them deliberately. `hook install` also warns about skill folders the source does not have, since those are usually unpublished work.
+
+Cursor, Codex and Gemini CLI document their own hooks; `sgw` does not write those yet, and `sgw hook status` says so. Skill names must be unique across the skills you sync into one root, since every agent addresses a skill by its folder name.
 
 One skill, without a manifest:
 

@@ -66,6 +66,8 @@ Install skills (no server needed - the source is named in the manifest):
                                                   where every agent reads it
   sgw fetch    <ref> [-format claude] [-out .]    one skill
       -path <dir> / -git <url> [-ref <r>] [-dir <d>]   source for fetch
+  sgw hook install                                keep them current: sync when
+                                                  an agent session starts
 
 Talk to a gateway (uses $SGW_URL and $SGW_TOKEN):
   sgw publish  <skill-dir> -ns <namespace> -version <semver>
@@ -102,6 +104,8 @@ func main() {
 		err = fetch(args)
 	case "sync":
 		err = syncCmd(args)
+	case "hook":
+		err = hookCmd(args)
 	case "deprecate":
 		err = deprecate(args)
 	case "audit":
@@ -211,7 +215,7 @@ func sourceFor(ctx context.Context, path, gitURL, gitRef, gitDir string) (source
 	case path != "" && gitURL != "":
 		return nil, errors.New("use -path or -git, not both")
 	case path != "":
-		return &source.Dir{Root: expandHome(path)}, nil
+		return &source.Dir{Root: syncer.ExpandHome(path)}, nil
 	case gitURL != "":
 		return source.NewGit(ctx, source.GitOptions{URL: gitURL, Ref: gitRef, Dir: gitDir})
 	default:
@@ -229,22 +233,6 @@ func gatewaySource(url string) (source.Source, error) {
 		c.BaseURL = url
 	}
 	return &source.Gateway{Client: c}, nil
-}
-
-// expandHome turns a leading "~" into the user's home directory, so
-// `sgw sync -out ~` works the same way in every shell.
-func expandHome(p string) string {
-	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
-		return p
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return p
-	}
-	if p == "~" {
-		return home
-	}
-	return filepath.Join(home, p[2:])
 }
 
 // parseRef splits "ns/name[@version]"; version defaults to "latest".
@@ -426,7 +414,7 @@ func fetch(args []string) error {
 	if err != nil {
 		return err
 	}
-	res, err := syncer.Install(ctx, src, translate.Default(), expandHome(*out), ref, []string{*format})
+	res, err := syncer.Install(ctx, src, translate.Default(), syncer.ExpandHome(*out), ref, []string{*format})
 	if err != nil {
 		return err
 	}
@@ -442,17 +430,29 @@ func syncCmd(args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	file := fs.String("file", "sgw-sync.yaml", "sync manifest")
 	out := fs.String("out", ".", "root to write into (\"~\" for every agent's global folder)")
+	force := fs.Bool("force", false, "overwrite files you edited after sync wrote them")
+	hookMode := fs.Bool("hook", false, "session-hook mode: throttled, silent, never fails")
+	every := fs.Duration("every", 4*time.Hour, "with -hook, the minimum gap between real syncs")
 	fs.Parse(args)
 	m, err := syncer.LoadManifest(*file)
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
+	root := syncer.ExpandHome(*out)
+	if *hookMode {
+		// A session hook must never delay or break a session, so this path
+		// reports nothing and always exits 0.
+		manifest, _ := filepath.Abs(*file)
+		abs, _ := filepath.Abs(root)
+		runHookSync(ctx, m, manifest, abs, *every)
+		return nil
+	}
 	src, err := m.Source(ctx, filepath.Dir(*file), gatewaySource)
 	if err != nil {
 		return err
 	}
-	rep, err := syncer.Sync(ctx, src, translate.Default(), expandHome(*out), m)
+	rep, err := syncer.SyncWith(ctx, src, translate.Default(), root, m, syncer.Options{Force: *force})
 	if err != nil {
 		return err
 	}

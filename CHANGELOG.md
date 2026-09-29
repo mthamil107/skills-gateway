@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `sgw hook install|status|remove` writes an agent's session-start hook, so
+  skills refresh when work begins instead of when someone remembers. The
+  hook is throttled (`-every`, default 4h), checks cheaply whether the
+  source moved before doing any work, stays silent unless it updated
+  something, and never delays or fails a session. Claude Code is supported;
+  Cursor, Codex and Gemini CLI document hooks but are not written yet.
+- `sgw sync` never overwrites a file you edited after it was written. Such
+  files are kept and reported; `sgw sync -force` overwrites them.
+
 ## [0.1.0] - 2026-09-28
 
 First release. Everything below is new.
